@@ -20,18 +20,28 @@ import android.media.MediaFormat;
 import android.util.Log;
 
 class Android720pFormatStrategy implements MediaFormatStrategy {
+    public static final int AUDIO_BITRATE_AS_IS = -1;
+    public static final int AUDIO_CHANNELS_AS_IS = -1;
     private static final String TAG = "720pFormatStrategy";
     private static final int LONGER_LENGTH = 1280;
     private static final int SHORTER_LENGTH = 720;
-    private static final int DEFAULT_BITRATE = 8000 * 1000; // From Nexus 4 Camera in 720p
-    private final int mBitRate;
+    private static final int DEFAULT_VIDEO_BITRATE = 8000 * 1000; // From Nexus 4 Camera in 720p
+    private final int mVideoBitrate;
+    private final int mAudioBitrate;
+    private final int mAudioChannels;
 
     public Android720pFormatStrategy() {
-        mBitRate = DEFAULT_BITRATE;
+        this(DEFAULT_VIDEO_BITRATE);
     }
 
-    public Android720pFormatStrategy(int bitRate) {
-        mBitRate = bitRate;
+    public Android720pFormatStrategy(int videoBitrate) {
+        this(videoBitrate, AUDIO_BITRATE_AS_IS, AUDIO_CHANNELS_AS_IS);
+    }
+
+    public Android720pFormatStrategy(int videoBitrate, int audioBitrate, int audioChannels) {
+        mVideoBitrate = videoBitrate;
+        mAudioBitrate = audioBitrate;
+        mAudioChannels = audioChannels;
     }
 
     @Override
@@ -59,7 +69,7 @@ class Android720pFormatStrategy implements MediaFormatStrategy {
         }
         MediaFormat format = MediaFormat.createVideoFormat("video/avc", outWidth, outHeight);
         // From Nexus 4 Camera in 720p
-        format.setInteger(MediaFormat.KEY_BIT_RATE, mBitRate);
+        format.setInteger(MediaFormat.KEY_BIT_RATE, mVideoBitrate);
         format.setInteger(MediaFormat.KEY_FRAME_RATE, 30);
         format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 3);
         format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
@@ -68,6 +78,13 @@ class Android720pFormatStrategy implements MediaFormatStrategy {
 
     @Override
     public MediaFormat createAudioOutputFormat(MediaFormat inputFormat) {
-        return null;
+        if (mAudioBitrate == AUDIO_BITRATE_AS_IS || mAudioChannels == AUDIO_CHANNELS_AS_IS) return null;
+
+        // Use original sample rate, as resampling is not supported yet.
+        final MediaFormat format = MediaFormat.createAudioFormat(MediaFormatExtraConstants.MIMETYPE_AUDIO_AAC,
+                inputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE), mAudioChannels);
+        format.setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC);
+        format.setInteger(MediaFormat.KEY_BIT_RATE, mAudioBitrate);
+        return format;
     }
 }
