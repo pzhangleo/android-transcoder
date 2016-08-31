@@ -77,7 +77,9 @@ class OutputSurface implements SurfaceTexture.OnFrameAvailableListener {
      */
     private void setup() {
         mTextureRender = new TextureRender();
+        mTextureRender.setAddImage(true);
         mTextureRender.surfaceCreated();
+
         // Even if we don't access the SurfaceTexture after the constructor returns, we
         // still need to keep a reference to it.  The Surface doesn't retain a reference
         // at the Java level, so if we don't either then the object can get GCed, which

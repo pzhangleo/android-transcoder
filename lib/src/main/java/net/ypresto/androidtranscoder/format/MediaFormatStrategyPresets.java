@@ -64,6 +64,11 @@ public class MediaFormatStrategyPresets {
         return new ExportPreset960x540Strategy();
     }
 
+    public static MediaFormatStrategy createAndroid720pStrategyV2(int bitrate, int audioBitrate, int audioChannels) {
+        return new Android720pFormatStrategyV2(bitrate, audioBitrate, audioChannels);
+    }
+
+
     private MediaFormatStrategyPresets() {
     }
 }
