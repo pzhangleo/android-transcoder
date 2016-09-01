@@ -30,14 +30,9 @@ public class ImageTextureRender {
     private static final int TRIANGLE_VERTICES_DATA_STRIDE_BYTES = 5 * FLOAT_SIZE_BYTES;
     private static final int TRIANGLE_VERTICES_DATA_POS_OFFSET = 0;
     private static final int TRIANGLE_VERTICES_DATA_UV_OFFSET = 3;
-    private final float[] mTriangleVerticesData = {
-            // X, Y, Z, U, V
-            -0.5f, -0.5f, 0, 0.f, 1.f,
-            0.5f, -0.5f, 0, 0.f, 0.f,
-            -0.5f, 0.5f, 0, 1.f, 1.f,
-            0.5f, 0.5f, 0, 1.f, 0.f,
-    };
 
+    private static float movieHeight;
+    private static float movieWidth;
 
     private FloatBuffer mTriangleVertices;
     private static final String VERTEX_SHADER =
@@ -66,19 +61,63 @@ public class ImageTextureRender {
     private int maPositionHandle;
     private int maTextureHandle;
     private int msTextureHandle;
-    private int mTextureID = -12345;
 
     public ImageTextureRender(){
+        float[] data = calecTriangleVerticesData();
+
         mTriangleVertices = ByteBuffer.allocateDirect(
-                mTriangleVerticesData.length * FLOAT_SIZE_BYTES)
+                data.length * FLOAT_SIZE_BYTES)
                 .order(ByteOrder.nativeOrder()).asFloatBuffer();
-        mTriangleVertices.put(mTriangleVerticesData).position(0);
+        mTriangleVertices.put(data).position(0);
         Matrix.setIdentityM(mSTMatrix, 0);
+    }
+
+    public float[] calecTriangleVerticesData(){
+
+        float imageXStart = -1.f;
+        float imageXEnd = 1.f;
+        float imageYStart = -1.f;
+        float imageYEnd = 1.f;
+        float imageUStart = 0.f;
+        float imageUEnd = 1.f;
+        float imageVStart = 0.f;
+        float imageVEnd = 1.f;
+
+        Bitmap map = getImageFromAssetsFile(mcontext, mfile);
+        float imageHeight = map.getHeight();
+        float imageWidth = map.getWidth();
+        //原理:图片小的时候控制绘制区域在(-1.f, 1.f)内部, 图片大的时候控制绘制区域在(-1.f, 1.f)外部
+        
+
+        float imageHeightScale = imageHeight/movieHeight;
+        float imageWidthScale = imageWidth/movieWidth;
+
+        imageXStart = -imageHeightScale;
+        imageXEnd = imageHeightScale;
+        imageYStart = -imageWidthScale;
+        imageYEnd = imageWidthScale;
+
+        float[] mTriangleVerticesData = {
+                // X, Y, Z, U, V
+                imageXStart, imageYStart, 0, imageUStart, imageVEnd,
+                imageXEnd, imageYStart, 0, imageUStart, imageVStart,
+                imageXStart, imageYEnd, 0, imageUEnd, imageVEnd,
+                imageXEnd, imageYEnd, 0, imageUEnd, imageUStart,
+        };
+        return mTriangleVerticesData;
     }
 
     public static void setImage(Context context, String file){
         mcontext = context;
         mfile = file;
+    }
+
+    public static void setMovieHeight(float height){
+        movieHeight = height;
+    }
+
+    public static void setMovieWidth(float width){
+        movieWidth = width;
     }
 
     public void drawFrame(SurfaceTexture st) {
@@ -88,10 +127,6 @@ public class ImageTextureRender {
 //        GLES20.glClear(GLES20.GL_DEPTH_BUFFER_BIT | GLES20.GL_COLOR_BUFFER_BIT);
         GLES20.glUseProgram(mProgram);
         checkGlError("glUseProgram");
-
-
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
-        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, mTextureID);
 
         mTriangleVertices.position(TRIANGLE_VERTICES_DATA_POS_OFFSET);
         GLES20.glVertexAttribPointer(maPositionHandle, 3, GLES20.GL_FLOAT, false,
@@ -106,14 +141,14 @@ public class ImageTextureRender {
         GLES20.glEnableVertexAttribArray(maTextureHandle);
         checkGlError("glEnableVertexAttribArray maTextureHandle");
 
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, mImageTexture);
 
         Matrix.setIdentityM(mMVPMatrix, 0);
-//        Matrix.rotateM(mMVPMatrix, 0, 90.f, 1, 0, 1);
         GLES20.glUniformMatrix4fv(muMVPMatrixHandle, 1, false, mMVPMatrix, 0);
         GLES20.glUniformMatrix4fv(muSTMatrixHandle, 1, false, mSTMatrix, 0);
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
         checkGlError("glDrawArrays");
-        GLES20.glDisableVertexAttribArray(maPositionHandle);
         GLES20.glFinish();
     }
 
@@ -150,20 +185,6 @@ public class ImageTextureRender {
         }
 
         mImageTexture = loadTexture(mcontext,mfile);
-        int[] textures = new int[1];
-        GLES20.glGenTextures(1, textures, 0);
-        mTextureID = textures[0];
-        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, mTextureID);
-        checkGlError("glBindTexture mTextureID");
-        GLES20.glTexParameterf(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER,
-                GLES20.GL_LINEAR);
-        GLES20.glTexParameterf(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER,
-                GLES20.GL_LINEAR);
-        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S,
-                GLES20.GL_CLAMP_TO_EDGE);
-        GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T,
-                GLES20.GL_CLAMP_TO_EDGE);
-        checkGlError("glTexParameter");
     }
 
     private int loadShader(int shaderType, String source) {

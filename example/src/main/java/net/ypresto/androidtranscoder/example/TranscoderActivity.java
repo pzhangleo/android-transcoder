@@ -50,7 +50,7 @@ public class TranscoderActivity extends Activity {
         });
 
 
-        ImageTextureRender.setImage(this, "test.png");
+        ImageTextureRender.setImage(this, "testTwo.png");
      Log.d(TAG, "test");
     }
 
@@ -109,8 +109,9 @@ public class TranscoderActivity extends Activity {
                         }
                     };
                     Log.d(TAG, "transcoding into " + file);
+
                     mFuture = MediaTranscoder.getInstance().transcodeVideo(fileDescriptor, file.getAbsolutePath(),
-                            MediaFormatStrategyPresets.createAndroid720pStrategyV2(8000 * 1000, 128 * 1000, 1), listener);
+                            MediaFormatStrategyPresets.createAndroidBitrateFormatSategy(8000 * 1000), listener);
                     switchButtonEnabled(true);
                 }
                 break;
