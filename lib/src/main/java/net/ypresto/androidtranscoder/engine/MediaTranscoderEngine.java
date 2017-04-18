@@ -15,10 +15,12 @@
  */
 package net.ypresto.androidtranscoder.engine;
 
+import android.media.Image;
 import android.media.MediaExtractor;
 import android.media.MediaFormat;
 import android.media.MediaMetadataRetriever;
 import android.media.MediaMuxer;
+import android.nfc.Tag;
 import android.util.Log;
 
 import net.ypresto.androidtranscoder.format.MediaFormatStrategy;
@@ -153,6 +155,24 @@ public class MediaTranscoderEngine {
         MediaExtractorUtils.TrackResult trackResult = MediaExtractorUtils.getFirstVideoAndAudioTrack(mExtractor);
         MediaFormat videoOutputFormat = formatStrategy.createVideoOutputFormat(trackResult.mVideoTrackFormat);
         MediaFormat audioOutputFormat = formatStrategy.createAudioOutputFormat(trackResult.mAudioTrackFormat);
+
+        //视频压图需要获得出来的视频的宽高
+
+        int rotation = trackResult.mVideoTrackFormat.getInteger(MediaFormat.KEY_ROTATION);
+        int height,width;
+        if (rotation == 90 || rotation == 270)
+        {
+            height = videoOutputFormat.getInteger(MediaFormat.KEY_WIDTH);
+            width = videoOutputFormat.getInteger(MediaFormat.KEY_HEIGHT);
+        }
+        else
+        {
+            height = videoOutputFormat.getInteger(MediaFormat.KEY_HEIGHT);
+            width = videoOutputFormat.getInteger(MediaFormat.KEY_WIDTH);
+        }
+        ImageTextureRender.setMovieWidth(width);
+        ImageTextureRender.setMovieHeight(height);
+
         if (videoOutputFormat == null && audioOutputFormat == null) {
             throw new InvalidOutputFormatException("MediaFormatStrategy returned pass-through for both video and audio. No transcoding is necessary.");
         }

@@ -15,12 +15,14 @@ import android.widget.ProgressBar;
 import android.widget.Toast;
 
 import net.ypresto.androidtranscoder.MediaTranscoder;
+import net.ypresto.androidtranscoder.engine.ImageTextureRender;
 import net.ypresto.androidtranscoder.format.MediaFormatStrategyPresets;
 
 import java.io.File;
 import java.io.FileDescriptor;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.concurrent.Future;
 
 
@@ -46,6 +48,10 @@ public class TranscoderActivity extends Activity {
                 mFuture.cancel(true);
             }
         });
+
+
+        ImageTextureRender.setImage(this, "testTwo.png");
+     Log.d(TAG, "test");
     }
 
     @Override
@@ -103,8 +109,9 @@ public class TranscoderActivity extends Activity {
                         }
                     };
                     Log.d(TAG, "transcoding into " + file);
+
                     mFuture = MediaTranscoder.getInstance().transcodeVideo(fileDescriptor, file.getAbsolutePath(),
-                            MediaFormatStrategyPresets.createAndroid720pStrategy(8000 * 1000, 128 * 1000, 1), listener);
+                            MediaFormatStrategyPresets.createAndroidBitrateFormatSategy(8000 * 1000), listener);
                     switchButtonEnabled(true);
                 }
                 break;
