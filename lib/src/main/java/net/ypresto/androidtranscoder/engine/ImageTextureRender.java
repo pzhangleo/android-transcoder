@@ -60,9 +60,9 @@ public class ImageTextureRender {
     private int maTextureHandle;
     private int msTextureHandle;
 
-    public ImageTextureRender() {
+    public ImageTextureRender(String filePath) {
+        mFilePath = filePath;
         float[] data = calecTriangleVerticesData();
-
         mTriangleVertices = ByteBuffer.allocateDirect(
                 data.length * FLOAT_SIZE_BYTES)
                 .order(ByteOrder.nativeOrder()).asFloatBuffer();
@@ -104,10 +104,6 @@ public class ImageTextureRender {
                 imageXStart, imageYEnd, 0, imageUEnd, imageVEnd,
                 imageXEnd, imageYEnd, 0, imageUEnd, imageUStart,
         };
-    }
-
-    public void setMaskImage(String file) {
-        mFilePath = file;
     }
 
     public void setMovieHeight(float height) {
