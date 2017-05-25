@@ -23,6 +23,7 @@ import android.media.MediaMuxer;
 import android.nfc.Tag;
 import android.util.Log;
 
+import net.ypresto.androidtranscoder.format.MediaFormatExtraConstants;
 import net.ypresto.androidtranscoder.format.MediaFormatStrategy;
 import net.ypresto.androidtranscoder.utils.MediaExtractorUtils;
 
@@ -149,6 +150,7 @@ public class MediaTranscoderEngine {
             mDurationUs = -1;
         }
         Log.d(TAG, "Duration (us): " + mDurationUs);
+        mediaMetadataRetriever.release();
     }
 
     private void setupTrackTranscoders(MediaFormatStrategy formatStrategy) {
@@ -157,21 +159,25 @@ public class MediaTranscoderEngine {
         MediaFormat audioOutputFormat = formatStrategy.createAudioOutputFormat(trackResult.mAudioTrackFormat);
 
         //视频压图需要获得出来的视频的宽高
-
-        int rotation = trackResult.mVideoTrackFormat.getInteger(MediaFormat.KEY_ROTATION);
+        MediaMetadataRetriever mediaMetadataRetriever = new MediaMetadataRetriever();
+        mediaMetadataRetriever.setDataSource(mInputFileDescriptor);
+        int rotation = 0;
+        try {
+            rotation = Integer.parseInt(mediaMetadataRetriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION));
+        } catch (NumberFormatException e) {
+            e.printStackTrace();
+        }
+        mediaMetadataRetriever.release();
         int height,width;
-        if (rotation == 90 || rotation == 270)
-        {
+        if (rotation == 90 || rotation == 270) {
             height = videoOutputFormat.getInteger(MediaFormat.KEY_WIDTH);
             width = videoOutputFormat.getInteger(MediaFormat.KEY_HEIGHT);
-        }
-        else
-        {
+        } else {
             height = videoOutputFormat.getInteger(MediaFormat.KEY_HEIGHT);
             width = videoOutputFormat.getInteger(MediaFormat.KEY_WIDTH);
         }
-        ImageTextureRender.setMovieWidth(width);
-        ImageTextureRender.setMovieHeight(height);
+        videoOutputFormat.setInteger(MediaFormatExtraConstants.KEY_MASK_HEIGHT, height);
+        videoOutputFormat.setInteger(MediaFormatExtraConstants.KEY_MASK_WIDTH, width);
 
         if (videoOutputFormat == null && audioOutputFormat == null) {
             throw new InvalidOutputFormatException("MediaFormatStrategy returned pass-through for both video and audio. No transcoding is necessary.");

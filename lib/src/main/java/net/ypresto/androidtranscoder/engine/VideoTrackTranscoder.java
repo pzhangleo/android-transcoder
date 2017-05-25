@@ -80,6 +80,13 @@ public class VideoTrackTranscoder implements TrackTranscoder {
             // refer: https://android.googlesource.com/platform/frameworks/av/+blame/lollipop-release/media/libstagefright/Utils.cpp
             inputFormat.setInteger(MediaFormatExtraConstants.KEY_ROTATION_DEGREES, 0);
         }
+        String maskPath = mOutputFormat.getString(MediaFormatExtraConstants.KEY_MASK_PATH);
+        if (maskPath != null) {
+            ImageTextureRender render = new ImageTextureRender();
+            render.setMaskImage(maskPath);
+            render.setMovieHeight(mOutputFormat.getInteger(MediaFormatExtraConstants.KEY_MASK_HEIGHT));
+            render.setMovieWidth(mOutputFormat.getInteger(MediaFormatExtraConstants.KEY_MASK_WIDTH));
+        }
         mDecoderOutputSurfaceWrapper = new OutputSurface();
         try {
             mDecoder = MediaCodec.createDecoderByType(inputFormat.getString(MediaFormat.KEY_MIME));

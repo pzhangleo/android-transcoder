@@ -5,7 +5,6 @@ import android.content.res.AssetManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.SurfaceTexture;
-import android.opengl.GLES11Ext;
 import android.opengl.GLES20;
 import android.opengl.GLUtils;
 import android.opengl.Matrix;
@@ -23,16 +22,15 @@ import java.nio.FloatBuffer;
 public class ImageTextureRender {
     private static final String TAG = "ImageTextureRender";
     private static int mImageTexture;
-    private static Context mcontext;
-    private static String mfile;
+    private String mFilePath;
 
     private static final int FLOAT_SIZE_BYTES = 4;
     private static final int TRIANGLE_VERTICES_DATA_STRIDE_BYTES = 5 * FLOAT_SIZE_BYTES;
     private static final int TRIANGLE_VERTICES_DATA_POS_OFFSET = 0;
     private static final int TRIANGLE_VERTICES_DATA_UV_OFFSET = 3;
 
-    private static float movieHeight;
-    private static float movieWidth;
+    private float mMovieHeight;
+    private float mMovieWidth;
 
     private FloatBuffer mTriangleVertices;
     private static final String VERTEX_SHADER =
@@ -46,7 +44,7 @@ public class ImageTextureRender {
                     "  vTextureCoord = (uSTMatrix * aTextureCoord).xy;\n" +
                     "}\n";
     private static final String FRAGMENT_SHADER =
-                    "#extension GL_OES_EGL_image_external : require\n" +
+            "#extension GL_OES_EGL_image_external : require\n" +
                     "precision mediump float;\n" +      // highp here doesn't seem to matter
                     "varying vec2 vTextureCoord;\n" +
                     "uniform sampler2D sTexture;\n" +
@@ -62,7 +60,7 @@ public class ImageTextureRender {
     private int maTextureHandle;
     private int msTextureHandle;
 
-    public ImageTextureRender(){
+    public ImageTextureRender() {
         float[] data = calecTriangleVerticesData();
 
         mTriangleVertices = ByteBuffer.allocateDirect(
@@ -72,7 +70,7 @@ public class ImageTextureRender {
         Matrix.setIdentityM(mSTMatrix, 0);
     }
 
-    public float[] calecTriangleVerticesData(){
+    public float[] calecTriangleVerticesData() {
 
         float imageXStart = -1.f;
         float imageXEnd = 1.f;
@@ -83,48 +81,48 @@ public class ImageTextureRender {
         float imageVStart = 0.f;
         float imageVEnd = 1.f;
 
-        Bitmap map = getImageFromAssetsFile(mcontext, mfile);
-        float imageHeight = map.getHeight();
-        float imageWidth = map.getWidth();
+        BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inJustDecodeBounds = true;
+        Bitmap map = BitmapFactory.decodeFile(mFilePath, options);
+        float imageHeight = options.outHeight;
+        float imageWidth = options.outWidth;
         //原理:图片小的时候控制绘制区域在(-1.f, 1.f)内部, 图片大的时候控制绘制区域在(-1.f, 1.f)外部
-        
 
-        float imageHeightScale = imageHeight/movieHeight;
-        float imageWidthScale = imageWidth/movieWidth;
+
+        float imageHeightScale = imageHeight / mMovieHeight;
+        float imageWidthScale = imageWidth / mMovieWidth;
 
         imageXStart = -imageHeightScale;
         imageXEnd = imageHeightScale;
         imageYStart = -imageWidthScale;
         imageYEnd = imageWidthScale;
 
-        float[] mTriangleVerticesData = {
+        return new float[]{
                 // X, Y, Z, U, V
                 imageXStart, imageYStart, 0, imageUStart, imageVEnd,
                 imageXEnd, imageYStart, 0, imageUStart, imageVStart,
                 imageXStart, imageYEnd, 0, imageUEnd, imageVEnd,
                 imageXEnd, imageYEnd, 0, imageUEnd, imageUStart,
         };
-        return mTriangleVerticesData;
     }
 
-    public static void setImage(Context context, String file){
-        mcontext = context;
-        mfile = file;
+    public void setMaskImage(String file) {
+        mFilePath = file;
     }
 
-    public static void setMovieHeight(float height){
-        movieHeight = height;
+    public void setMovieHeight(float height) {
+        mMovieHeight = height;
     }
 
-    public static void setMovieWidth(float width){
-        movieWidth = width;
+    public void setMovieWidth(float width) {
+        mMovieWidth = width;
     }
 
     public void drawFrame(SurfaceTexture st) {
         checkGlError("onDrawFrame start");
         st.getTransformMatrix(mSTMatrix);
-//        GLES20.glClearColor(0.0f, 0.f, 0.0f, 1.0f);
-//        GLES20.glClear(GLES20.GL_DEPTH_BUFFER_BIT | GLES20.GL_COLOR_BUFFER_BIT);
+        //        GLES20.glClearColor(0.0f, 0.f, 0.0f, 1.0f);
+        //        GLES20.glClear(GLES20.GL_DEPTH_BUFFER_BIT | GLES20.GL_COLOR_BUFFER_BIT);
         GLES20.glUseProgram(mProgram);
         checkGlError("glUseProgram");
 
@@ -184,7 +182,7 @@ public class ImageTextureRender {
             throw new RuntimeException("Could not get attrib location for sTexture");
         }
 
-        mImageTexture = loadTexture(mcontext,mfile);
+        mImageTexture = loadTexture();
     }
 
     private int loadShader(int shaderType, String source) {
@@ -202,6 +200,7 @@ public class ImageTextureRender {
         }
         return shader;
     }
+
     private int createProgram(String vertexSource, String fragmentSource) {
         int vertexShader = loadShader(GLES20.GL_VERTEX_SHADER, vertexSource);
         if (vertexShader == 0) {
@@ -231,6 +230,7 @@ public class ImageTextureRender {
         }
         return program;
     }
+
     public void checkGlError(String op) {
         int error;
         while ((error = GLES20.glGetError()) != GLES20.GL_NO_ERROR) {
@@ -239,44 +239,44 @@ public class ImageTextureRender {
         }
     }
 
-    private static Bitmap getImageFromAssetsFile(Context context, String fileName){
+    private static Bitmap getImageFromAssetsFile(Context context, String fileName) {
         Bitmap image = null;
         AssetManager am = context.getResources().getAssets();
-        try{
+        try {
             InputStream is = am.open(fileName);
             image = BitmapFactory.decodeStream(is);
             is.close();
-        }catch (IOException e){
+        } catch (IOException e) {
             e.printStackTrace();
         }
         return image;
     }
 
-    public static int loadTexture(final Context context, final String name){
+    private int loadTexture() {
         final int[] textureHandle = new int[1];
 
         GLES20.glGenTextures(1, textureHandle, 0);
-        if (textureHandle[0] != 0){
+        if (textureHandle[0] != 0) {
 
-        // Read in the resource
-        final Bitmap bitmap = getImageFromAssetsFile(context,name);
+            // Read in the resource
+            final Bitmap bitmap = BitmapFactory.decodeFile(mFilePath);
 
-        // Bind to the texture in OpenGL
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureHandle[0]);
+            // Bind to the texture in OpenGL
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureHandle[0]);
 
-        // Set filtering
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR);
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR);
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
-        // Load the bitmap into the bound texture.
-        GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bitmap, 0);
+            // Set filtering
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR);
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR);
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
+            // Load the bitmap into the bound texture.
+            GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bitmap, 0);
 
-        // Recycle the bitmap, since its data has been loaded into OpenGL.
-        bitmap.recycle();
+            // Recycle the bitmap, since its data has been loaded into OpenGL.
+            bitmap.recycle();
         }
 
-        if (textureHandle[0] == 0){
+        if (textureHandle[0] == 0) {
             throw new RuntimeException("Error loading texture.");
         }
 
@@ -305,19 +305,19 @@ public class ImageTextureRender {
             1.0f, 1.0f,
             1.0f, 0.0f,
     };
-//镜像
+    //镜像
     private final float[] verticalFlipTextureCoordinates = {
             0.0f, 1.0f,
             1.0f, 1.0f,
-            0.0f,  0.0f,
-            1.0f,  0.0f,
+            0.0f, 0.0f,
+            1.0f, 0.0f,
     };
 
     private final float[] horizontalFlipTextureCoordinates = {
             1.0f, 0.0f,
             0.0f, 0.0f,
-            1.0f,  1.0f,
-            0.0f,  1.0f,
+            1.0f, 1.0f,
+            0.0f, 1.0f,
     };
 
     private final float[] rotateRightVerticalFlipTextureCoordinates = {

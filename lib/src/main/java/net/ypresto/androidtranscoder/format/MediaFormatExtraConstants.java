@@ -40,6 +40,13 @@ public class MediaFormatExtraConstants {
      */
     public static final String KEY_ROTATION_DEGREES = "rotation-degrees";
 
+    /**
+     * For mask image path
+     */
+    public static final String KEY_MASK_PATH = "mask-path";
+    public static final String KEY_MASK_WIDTH = "mask-width";
+    public static final String KEY_MASK_HEIGHT = "mask-height";
+
     // Video formats
     // from MediaFormat of API level >= 21
     public static final String MIMETYPE_VIDEO_AVC = "video/avc";

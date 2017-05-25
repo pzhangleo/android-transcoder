@@ -22,7 +22,6 @@ import java.io.File;
 import java.io.FileDescriptor;
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.io.InputStream;
 import java.util.concurrent.Future;
 
 
@@ -50,7 +49,7 @@ public class TranscoderActivity extends Activity {
         });
 
 
-        ImageTextureRender.setImage(this, "testTwo.png");
+//        ImageTextureRender.setMaskImage("testTwo.png");
      Log.d(TAG, "test");
     }
 
@@ -111,7 +110,7 @@ public class TranscoderActivity extends Activity {
                     Log.d(TAG, "transcoding into " + file);
 
                     mFuture = MediaTranscoder.getInstance().transcodeVideo(fileDescriptor, file.getAbsolutePath(),
-                            MediaFormatStrategyPresets.createAndroidBitrateFormatSategy(8000 * 1000), listener);
+                            MediaFormatStrategyPresets.createAndroidBitrateFormatStrategy(8000 * 1000, null), listener);
                     switchButtonEnabled(true);
                 }
                 break;

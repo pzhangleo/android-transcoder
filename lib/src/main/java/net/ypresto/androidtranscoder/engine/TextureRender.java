@@ -70,8 +70,6 @@ class TextureRender {
     private int muSTMatrixHandle;
     private int maPositionHandle;
     private int maTextureHandle;
-    private ImageTextureRender imageTextureRender;
-    private boolean maddImage;
 
 
     public TextureRender() {
@@ -80,14 +78,6 @@ class TextureRender {
                 .order(ByteOrder.nativeOrder()).asFloatBuffer();
         mTriangleVertices.put(mTriangleVerticesData).position(0);
         Matrix.setIdentityM(mSTMatrix, 0);
-        maddImage = false;
-    }
-
-    public void setAddImage(boolean addImage){
-        maddImage = addImage;
-        if (maddImage){
-            imageTextureRender = new ImageTextureRender();
-        }
     }
 
     public int getTextureId() {
@@ -122,9 +112,6 @@ class TextureRender {
         checkGlError("glDrawArrays");
         GLES20.glFinish();
 
-        if(maddImage){
-            imageTextureRender.drawFrame(st);
-        }
     }
     /**
      * Initializes GL state.  Call this after the EGL surface has been created and made current.
@@ -168,9 +155,6 @@ class TextureRender {
         GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T,
                 GLES20.GL_CLAMP_TO_EDGE);
         checkGlError("glTexParameter");
-        if(maddImage){
-            imageTextureRender.surfaceCreated();
-        }
     }
     /**
      * Replaces the fragment shader.

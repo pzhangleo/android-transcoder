@@ -51,6 +51,7 @@ class OutputSurface implements SurfaceTexture.OnFrameAvailableListener {
     private Object mFrameSyncObject = new Object();     // guards mFrameAvailable
     private boolean mFrameAvailable;
     private TextureRender mTextureRender;
+    private ImageTextureRender mImageTextureRender;
     /**
      * Creates an OutputSurface backed by a pbuffer with the specifed dimensions.  The new
      * EGL context and surface will be made current.  Creates a Surface that can be passed
@@ -71,15 +72,22 @@ class OutputSurface implements SurfaceTexture.OnFrameAvailableListener {
     public OutputSurface() {
         setup();
     }
+
+    public OutputSurface(ImageTextureRender imageTextureRender) {
+        mImageTextureRender = imageTextureRender;
+        setup();
+    }
+
     /**
      * Creates instances of TextureRender and SurfaceTexture, and a Surface associated
      * with the SurfaceTexture.
      */
     private void setup() {
         mTextureRender = new TextureRender();
-        mTextureRender.setAddImage(true);
         mTextureRender.surfaceCreated();
-
+        if (mImageTextureRender != null) {
+            mImageTextureRender.surfaceCreated();
+        }
         // Even if we don't access the SurfaceTexture after the constructor returns, we
         // still need to keep a reference to it.  The Surface doesn't retain a reference
         // at the Java level, so if we don't either then the object can get GCed, which
@@ -254,6 +262,9 @@ class OutputSurface implements SurfaceTexture.OnFrameAvailableListener {
      */
     public void drawImage() {
         mTextureRender.drawFrame(mSurfaceTexture);
+        if (mImageTextureRender != null) {
+            mImageTextureRender.drawFrame(mSurfaceTexture);
+        }
     }
     @Override
     public void onFrameAvailable(SurfaceTexture st) {

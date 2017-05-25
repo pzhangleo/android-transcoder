@@ -29,9 +29,11 @@ public class AndroidBitrateFormatStrategy implements MediaFormatStrategy {
     private static final int DEFAULT_BITRATE = 2500 * 1000; // From Nexus 4 Camera in 720p
     private int mBitRate = DEFAULT_BITRATE;
     private int mOriBitrate = 0;
+    private String mMaskFilePath;
 
-    public AndroidBitrateFormatStrategy(int bitRate) {
+    public AndroidBitrateFormatStrategy(int bitRate, String maskFilePath) {
         mOriBitrate = bitRate;
+        mMaskFilePath = maskFilePath;
     }
 
     @Override
@@ -81,6 +83,9 @@ public class AndroidBitrateFormatStrategy implements MediaFormatStrategy {
         format.setInteger(MediaFormat.KEY_FRAME_RATE, 30);
         format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 3);
         format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
+        if (mMaskFilePath != null) {
+            format.setString(MediaFormatExtraConstants.KEY_MASK_PATH, mMaskFilePath);
+        }
         return format;
     }
 
