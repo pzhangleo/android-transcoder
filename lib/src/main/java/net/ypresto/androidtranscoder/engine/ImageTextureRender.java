@@ -100,10 +100,10 @@ public class ImageTextureRender {
         float imageHeightScale = mMovieHeight / imageHeight;
         float imageWidthScale = mMovieWidth / imageWidth;
 
-        imageXStart = -imageHeightScale;
-        imageXEnd = imageHeightScale;
-        imageYStart = -imageWidthScale;
-        imageYEnd = imageWidthScale;
+        imageXStart = -imageHeightScale/2;
+        imageXEnd = imageHeightScale/2;
+        imageYStart = -imageWidthScale/2;
+        imageYEnd = imageWidthScale/2;
 
         return new float[]{
                 // X, Y, Z, U, V
