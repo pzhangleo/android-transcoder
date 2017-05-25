@@ -112,6 +112,8 @@ public class ImageTextureRender {
 
     public void drawFrame(SurfaceTexture st) {
         checkGlError("onDrawFrame start");
+        GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA);
+        GLES20.glEnable(GLES20.GL_BLEND);
         st.getTransformMatrix(mSTMatrix);
         //        GLES20.glClearColor(0.0f, 0.f, 0.0f, 1.0f);
         //        GLES20.glClear(GLES20.GL_DEPTH_BUFFER_BIT | GLES20.GL_COLOR_BUFFER_BIT);
@@ -140,6 +142,7 @@ public class ImageTextureRender {
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
         checkGlError("glDrawArrays");
         GLES20.glFinish();
+        GLES20.glDisable(GLES20.GL_BLEND);
     }
 
     public void surfaceCreated() {
@@ -252,10 +255,22 @@ public class ImageTextureRender {
 
             // Read in the resource
             final Bitmap bitmap = BitmapFactory.decodeFile(mFilePath);
+            byte[] buffer = new byte[bitmap.getWidth() * bitmap.getHeight() * 4];
+            for (int y = 0; y < bitmap.getHeight(); y++)
+                for (int x = 0; x < bitmap.getWidth(); x++) {
+                    int pixel = bitmap.getPixel(x, y);
+                    buffer[(y * bitmap.getWidth() + x) * 4 + 0] = (byte) ((pixel >> 16) & 0xFF);
+                    buffer[(y * bitmap.getWidth() + x) * 4 + 1] = (byte) ((pixel >> 8) & 0xFF);
+                    buffer[(y * bitmap.getWidth() + x) * 4 + 2] = (byte) ((pixel >> 0) & 0xFF);
+                    buffer[(y * bitmap.getWidth() + x) * 4 + 3] = (byte) ((pixel >> 24) & 0xFF);
+                }
 
+            ByteBuffer byteBuffer = ByteBuffer.allocateDirect(bitmap.getWidth() * bitmap.getHeight() * 4);
+            byteBuffer.put(buffer).position(0);
             // Bind to the texture in OpenGL
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureHandle[0]);
-
+            GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, bitmap.getWidth(), bitmap.getHeight(), 0,
+                    GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, byteBuffer);
             // Set filtering
             GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR);
             GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR);
