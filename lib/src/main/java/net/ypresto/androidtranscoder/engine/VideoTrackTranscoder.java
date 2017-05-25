@@ -86,8 +86,10 @@ public class VideoTrackTranscoder implements TrackTranscoder {
             render.setMaskImage(maskPath);
             render.setMovieHeight(mOutputFormat.getInteger(MediaFormatExtraConstants.KEY_MASK_HEIGHT));
             render.setMovieWidth(mOutputFormat.getInteger(MediaFormatExtraConstants.KEY_MASK_WIDTH));
+            mDecoderOutputSurfaceWrapper = new OutputSurface(render);
+        } else {
+            mDecoderOutputSurfaceWrapper = new OutputSurface();
         }
-        mDecoderOutputSurfaceWrapper = new OutputSurface();
         try {
             mDecoder = MediaCodec.createDecoderByType(inputFormat.getString(MediaFormat.KEY_MIME));
         } catch (IOException e) {
