@@ -97,13 +97,13 @@ public class ImageTextureRender {
         //原理:图片小的时候控制绘制区域在(-1.f, 1.f)内部, 图片大的时候控制绘制区域在(-1.f, 1.f)外部
 
 
-        float imageHeightScale = imageHeight / mMovieHeight;
-        float imageWidthScale = imageWidth / mMovieWidth;
-
-        imageXStart = -imageHeightScale;
-        imageXEnd = imageHeightScale;
-        imageYStart = -imageWidthScale;
-        imageYEnd = imageWidthScale;
+//        float imageHeightScale = imageHeight / mMovieHeight;
+//        float imageWidthScale = imageWidth / mMovieWidth;
+//
+//        imageXStart = -imageHeightScale;
+//        imageXEnd = imageHeightScale;
+//        imageYStart = -imageWidthScale;
+//        imageYEnd = imageWidthScale;
 
         return new float[]{
                 // X, Y, Z, U, V
