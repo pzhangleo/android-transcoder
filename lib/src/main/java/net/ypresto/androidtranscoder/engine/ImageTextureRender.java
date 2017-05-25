@@ -60,8 +60,10 @@ public class ImageTextureRender {
     private int maTextureHandle;
     private int msTextureHandle;
 
-    public ImageTextureRender(String filePath) {
+    public ImageTextureRender(String filePath, int movieHeight, int movieWidth) {
         mFilePath = filePath;
+        mMovieHeight = movieHeight;
+        mMovieWidth = movieWidth;
         float[] data = calecTriangleVerticesData();
         mTriangleVertices = ByteBuffer.allocateDirect(
                 data.length * FLOAT_SIZE_BYTES)
@@ -104,14 +106,6 @@ public class ImageTextureRender {
                 imageXStart, imageYEnd, 0, imageUEnd, imageVEnd,
                 imageXEnd, imageYEnd, 0, imageUEnd, imageUStart,
         };
-    }
-
-    public void setMovieHeight(float height) {
-        mMovieHeight = height;
-    }
-
-    public void setMovieWidth(float width) {
-        mMovieWidth = width;
     }
 
     public void drawFrame(SurfaceTexture st) {
