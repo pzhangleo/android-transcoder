@@ -77,7 +77,6 @@ class OutputSurface implements SurfaceTexture.OnFrameAvailableListener {
      */
     private void setup() {
         mTextureRender = new TextureRender();
-        mTextureRender.setAddImage(true);
         mTextureRender.surfaceCreated();
 
         // Even if we don't access the SurfaceTexture after the constructor returns, we

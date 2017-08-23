@@ -72,6 +72,10 @@ public class MediaFormatStrategyPresets {
         return new Android720pFormatStrategyV2(bitrate, audioBitrate, audioChannels);
     }
 
+    public static MediaFormatStrategy createAndroidBitrateFormatSategy(int bitrate){
+        return new AndroidBitrateFormatStrategy(bitrate);
+    }
+
     private MediaFormatStrategyPresets() {
     }
 }

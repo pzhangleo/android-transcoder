@@ -16,14 +16,12 @@ import android.widget.ProgressBar;
 import android.widget.Toast;
 
 import net.ypresto.androidtranscoder.MediaTranscoder;
-import net.ypresto.androidtranscoder.engine.ImageTextureRender;
 import net.ypresto.androidtranscoder.format.MediaFormatStrategyPresets;
 
 import java.io.File;
 import java.io.FileDescriptor;
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.io.InputStream;
 import java.util.concurrent.Future;
 
 
@@ -52,7 +50,6 @@ public class TranscoderActivity extends Activity {
         });
 
 
-        ImageTextureRender.setImage(this, "testTwo.png");
      Log.d(TAG, "test");
     }
 
