@@ -1,25 +1,21 @@
-apply plugin: 'com.android.application'
+plugins {
+    id 'com.android.application'
+}
 
 android {
-    compileSdkVersion 24
-    buildToolsVersion "24.0.1"
+    namespace 'net.ypresto.androidtranscoder.example'
+    compileSdk 35
 
     defaultConfig {
-        applicationId "net.ypresto.androidtranscoder.example"
-        minSdkVersion 18
-        targetSdkVersion 24
+        applicationId 'net.ypresto.androidtranscoder.example'
+        minSdk 18
+        targetSdk 35
         versionCode 1
-        versionName "1.0"
-    }
-    buildTypes {
-        release {
-            minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
-        }
+        versionName '1.0'
     }
 }
 
 dependencies {
-    compile project(':lib')
-    compile 'com.android.support:support-core-utils:24.2.0'
+    implementation project(':lib')
+    implementation 'androidx.core:core:1.15.0'
 }
