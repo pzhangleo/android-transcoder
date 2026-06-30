@@ -15,12 +15,10 @@
  */
 package net.ypresto.androidtranscoder.engine;
 
-import android.media.Image;
 import android.media.MediaExtractor;
 import android.media.MediaFormat;
 import android.media.MediaMetadataRetriever;
 import android.media.MediaMuxer;
-import android.nfc.Tag;
 import android.util.Log;
 
 import net.ypresto.androidtranscoder.format.MediaFormatStrategy;
@@ -130,23 +128,27 @@ public class MediaTranscoderEngine {
 
     private void setupMetadata() throws IOException {
         MediaMetadataRetriever mediaMetadataRetriever = new MediaMetadataRetriever();
-        mediaMetadataRetriever.setDataSource(mInputFileDescriptor);
-
-        String rotationString = mediaMetadataRetriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION);
         try {
-            mMuxer.setOrientationHint(Integer.parseInt(rotationString));
-        } catch (NumberFormatException e) {
-            // skip
-        }
+            mediaMetadataRetriever.setDataSource(mInputFileDescriptor);
 
-        // TODO: parse ISO 6709
-        // String locationString = mediaMetadataRetriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_LOCATION);
-        // mMuxer.setLocation(Integer.getInteger(rotationString, 0));
+            String rotationString = mediaMetadataRetriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION);
+            try {
+                mMuxer.setOrientationHint(Integer.parseInt(rotationString));
+            } catch (NumberFormatException e) {
+                // skip
+            }
 
-        try {
-            mDurationUs = Long.parseLong(mediaMetadataRetriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)) * 1000;
-        } catch (NumberFormatException e) {
-            mDurationUs = -1;
+            // TODO: parse ISO 6709
+            // String locationString = mediaMetadataRetriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_LOCATION);
+            // mMuxer.setLocation(Integer.getInteger(rotationString, 0));
+
+            try {
+                mDurationUs = Long.parseLong(mediaMetadataRetriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)) * 1000;
+            } catch (NumberFormatException e) {
+                mDurationUs = -1;
+            }
+        } finally {
+            mediaMetadataRetriever.release();
         }
         Log.d(TAG, "Duration (us): " + mDurationUs);
     }

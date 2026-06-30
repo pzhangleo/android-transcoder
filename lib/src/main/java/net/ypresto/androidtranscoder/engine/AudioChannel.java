@@ -110,7 +110,7 @@ class AudioChannel {
         buffer.presentationTimeUs = presentationTimeUs;
         buffer.data = data == null ? null : data.asShortBuffer();
 
-        if (mOverflowBuffer.data == null) {
+        if (data != null && mOverflowBuffer.data == null) {
             mOverflowBuffer.data = ByteBuffer
                     .allocateDirect(data.capacity())
                     .order(ByteOrder.nativeOrder())
@@ -165,28 +165,24 @@ class AudioChannel {
     private static long sampleCountToDurationUs(final int sampleCount,
                                                 final int sampleRate,
                                                 final int channelCount) {
-        return (sampleCount / (sampleRate * MICROSECS_PER_SEC)) / channelCount;
+        return sampleCount * MICROSECS_PER_SEC / sampleRate / channelCount;
     }
 
     private long drainOverflow(final ShortBuffer outBuff) {
         final ShortBuffer overflowBuff = mOverflowBuffer.data;
         final int overflowLimit = overflowBuff.limit();
-        final int overflowSize = overflowBuff.remaining();
+        outBuff.clear();
+        final int chunkSize = Math.min(overflowBuff.remaining(), outBuff.remaining());
 
         final long beginPresentationTimeUs = mOverflowBuffer.presentationTimeUs +
                 sampleCountToDurationUs(overflowBuff.position(), mInputSampleRate, mOutputChannelCount);
 
-        outBuff.clear();
-        // Limit overflowBuff to outBuff's capacity
-        overflowBuff.limit(outBuff.capacity());
-        // Load overflowBuff onto outBuff
+        overflowBuff.limit(overflowBuff.position() + chunkSize);
         outBuff.put(overflowBuff);
 
-        if (overflowSize >= outBuff.capacity()) {
-            // Overflow fully consumed - Reset
+        if (overflowBuff.position() >= overflowLimit) {
             overflowBuff.clear().limit(0);
         } else {
-            // Only partially consumed - Keep position & restore previous limit
             overflowBuff.limit(overflowLimit);
         }
 

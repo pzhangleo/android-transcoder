@@ -15,7 +15,6 @@
  */
 package net.ypresto.androidtranscoder.engine;
 
-import android.annotation.SuppressLint;
 import android.media.MediaCodec;
 import android.media.MediaExtractor;
 import android.media.MediaFormat;
@@ -24,6 +23,8 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
 public class PassThroughTrackTranscoder implements TrackTranscoder {
+    private static final int DEFAULT_BUFFER_SIZE = 256 * 1024;
+
     private final MediaExtractor mExtractor;
     private final int mTrackIndex;
     private final QueuedMuxer mMuxer;
@@ -44,7 +45,8 @@ public class PassThroughTrackTranscoder implements TrackTranscoder {
 
         mActualOutputFormat = mExtractor.getTrackFormat(mTrackIndex);
         mMuxer.setOutputFormat(mSampleType, mActualOutputFormat);
-        mBufferSize = mActualOutputFormat.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE);
+        mBufferSize = mActualOutputFormat.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)
+                ? mActualOutputFormat.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE) : DEFAULT_BUFFER_SIZE;
         mBuffer = ByteBuffer.allocateDirect(mBufferSize).order(ByteOrder.nativeOrder());
     }
 
@@ -57,7 +59,6 @@ public class PassThroughTrackTranscoder implements TrackTranscoder {
         return mActualOutputFormat;
     }
 
-    @SuppressLint("Assert")
     @Override
     public boolean stepPipeline() {
         if (mIsEOS) return false;
@@ -73,7 +74,15 @@ public class PassThroughTrackTranscoder implements TrackTranscoder {
 
         mBuffer.clear();
         int sampleSize = mExtractor.readSampleData(mBuffer, 0);
-        assert sampleSize <= mBufferSize;
+        if (sampleSize < 0) {
+            mBufferInfo.set(0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+            mMuxer.writeSampleData(mSampleType, mBuffer, mBufferInfo);
+            mIsEOS = true;
+            return true;
+        }
+        if (sampleSize > mBufferSize) {
+            throw new IllegalStateException("Sample size exceeded buffer size. sampleSize=" + sampleSize + ", bufferSize=" + mBufferSize);
+        }
         boolean isKeyFrame = (mExtractor.getSampleFlags() & MediaExtractor.SAMPLE_FLAG_SYNC) != 0;
         int flags = isKeyFrame ? MediaCodec.BUFFER_FLAG_SYNC_FRAME : 0;
         mBufferInfo.set(0, sampleSize, mExtractor.getSampleTime(), flags);

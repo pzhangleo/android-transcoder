@@ -30,7 +30,7 @@ import java.util.List;
  */
 public class QueuedMuxer {
     private static final String TAG = "QueuedMuxer";
-    private static final int BUFFER_SIZE = 64 * 1024; // I have no idea whether this value is appropriate or not...
+    private static final int BUFFER_SIZE = 64 * 1024;
     private final MediaMuxer mMuxer;
     private final Listener mListener;
     private MediaFormat mVideoFormat;
@@ -99,8 +99,23 @@ public class QueuedMuxer {
         if (mByteBuffer == null) {
             mByteBuffer = ByteBuffer.allocateDirect(BUFFER_SIZE).order(ByteOrder.nativeOrder());
         }
+        ensureByteBufferCapacity(bufferInfo.size);
         mByteBuffer.put(byteBuf);
         mSampleInfoList.add(new SampleInfo(sampleType, bufferInfo.size, bufferInfo));
+    }
+
+    private void ensureByteBufferCapacity(int size) {
+        if (mByteBuffer.remaining() >= size) return;
+
+        int newCapacity = mByteBuffer.capacity();
+        int requiredCapacity = mByteBuffer.position() + size;
+        while (newCapacity < requiredCapacity) {
+            newCapacity *= 2;
+        }
+        ByteBuffer expandedBuffer = ByteBuffer.allocateDirect(newCapacity).order(ByteOrder.nativeOrder());
+        mByteBuffer.flip();
+        expandedBuffer.put(mByteBuffer);
+        mByteBuffer = expandedBuffer;
     }
 
     private int getTrackIndexForSampleType(SampleType sampleType) {
