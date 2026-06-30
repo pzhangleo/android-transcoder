@@ -7,13 +7,14 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
-import androidx.core.content.FileProvider;
 import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
 import android.widget.ProgressBar;
 import android.widget.Toast;
+
+import androidx.core.content.FileProvider;
 
 import net.ypresto.androidtranscoder.MediaTranscoder;
 import net.ypresto.androidtranscoder.format.MediaFormatStrategyPresets;
@@ -45,12 +46,11 @@ public class TranscoderActivity extends Activity {
         findViewById(R.id.cancel_button).setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                mFuture.cancel(true);
+                if (mFuture != null) {
+                    mFuture.cancel(true);
+                }
             }
         });
-
-
-     Log.d(TAG, "test");
     }
 
     @Override
@@ -58,7 +58,7 @@ public class TranscoderActivity extends Activity {
         switch (requestCode) {
             case REQUEST_CODE_PICK: {
                 final File file;
-                if (resultCode == RESULT_OK) {
+                if (resultCode == RESULT_OK && data != null && data.getData() != null) {
                     try {
                         File outputDir = new File(getExternalFilesDir(null), "outputs");
                         //noinspection ResultOfMethodCallIgnored
