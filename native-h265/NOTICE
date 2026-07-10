@@ -1,0 +1,6 @@
+native-h265 is a separate GPL-2.0-only module.
+
+No third-party codec implementation is bundled in this repository. If FFmpeg,
+x265, libde265, or another provider is added, its source, copyright notices,
+license text, build configuration, and corresponding source availability must be
+documented here and distributed according to its license.

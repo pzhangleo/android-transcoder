@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = 'android-transcoder'
 include ':lib', ':example'
+include ':native-h265'

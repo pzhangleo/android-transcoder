@@ -96,6 +96,14 @@ The `example` module is a Jetpack Compose demonstration app. It lets you choose 
 
 The implementation is in `example/src/main/java/net/ypresto/androidtranscoder/example/TranscoderActivity.kt`.
 
+## Optional Native H.265 Module
+
+The `native-h265` module is a separate GPL-2.0-only integration boundary targeting API 21+. The main `:lib` module remains Apache 2.0. The native module currently contains a JNI stub only; it does not bundle FFmpeg, x265, libde265, or prebuilt codec binaries. Add the chosen codec provider and its complete license/source notices before enabling software H.265 encoding.
+
+```bash
+./gradlew :native-h265:assembleDebug
+```
+
 ## Limitations
 
 - Hardware codec availability and behavior vary by device. Validate the codecs and parameters required by your product on real devices.

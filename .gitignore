@@ -3,4 +3,6 @@
 /.idea
 .DS_Store
 /build
+**/build/
+.cxx/
 *.iml
