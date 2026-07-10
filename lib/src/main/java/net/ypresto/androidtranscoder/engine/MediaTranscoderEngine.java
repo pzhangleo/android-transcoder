@@ -185,7 +185,7 @@ public class MediaTranscoderEngine {
         mExtractor.selectTrack(trackResult.mAudioTrackIndex);
     }
 
-    private void runPipelines() {
+    private void runPipelines() throws InterruptedException {
         long loopCount = 0;
         if (mDurationUs <= 0) {
             double progress = PROGRESS_UNKNOWN;
@@ -193,6 +193,7 @@ public class MediaTranscoderEngine {
             if (mProgressCallback != null) mProgressCallback.onProgress(progress); // unknown
         }
         while (!(mVideoTrackTranscoder.isFinished() && mAudioTrackTranscoder.isFinished())) {
+            checkCancellation();
             boolean stepped = mVideoTrackTranscoder.stepPipeline()
                     || mAudioTrackTranscoder.stepPipeline();
             loopCount++;
@@ -204,12 +205,14 @@ public class MediaTranscoderEngine {
                 if (mProgressCallback != null) mProgressCallback.onProgress(progress);
             }
             if (!stepped) {
-                try {
-                    Thread.sleep(SLEEP_TO_WAIT_TRACK_TRANSCODERS);
-                } catch (InterruptedException e) {
-                    // nothing to do
-                }
+                Thread.sleep(SLEEP_TO_WAIT_TRACK_TRANSCODERS);
             }
+        }
+    }
+
+    private static void checkCancellation() throws InterruptedException {
+        if (Thread.currentThread().isInterrupted()) {
+            throw new InterruptedException("Transcoding was canceled.");
         }
     }
 

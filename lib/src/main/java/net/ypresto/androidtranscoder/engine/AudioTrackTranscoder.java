@@ -116,6 +116,11 @@ public class AudioTrackTranscoder implements TrackTranscoder {
         }
 
         final int sampleSize = mExtractor.readSampleData(mDecoderBuffers.getInputBuffer(result), 0);
+        if (sampleSize < 0) {
+            mIsExtractorEOS = true;
+            mDecoder.queueInputBuffer(result, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+            return DRAIN_STATE_CONSUMED;
+        }
         final boolean isKeyFrame = (mExtractor.getSampleFlags() & MediaExtractor.SAMPLE_FLAG_SYNC) != 0;
         mDecoder.queueInputBuffer(result, 0, sampleSize, mExtractor.getSampleTime(), isKeyFrame ? MediaCodec.BUFFER_FLAG_SYNC_FRAME : 0);
         mExtractor.advance();

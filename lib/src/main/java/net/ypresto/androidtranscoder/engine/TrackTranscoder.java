@@ -35,7 +35,7 @@ public interface TrackTranscoder {
      *
      * @return true if data moved in pipeline.
      */
-    boolean stepPipeline();
+    boolean stepPipeline() throws InterruptedException;
 
     /**
      * Get presentation time of last sample written to muxer.

@@ -198,7 +198,7 @@ class OutputSurface implements SurfaceTexture.OnFrameAvailableListener {
      * the OutputSurface object, after the onFrameAvailable callback has signaled that new
      * data is available.
      */
-    public void awaitNewImage() {
+    public void awaitNewImage() throws InterruptedException {
         final int TIMEOUT_MS = 10000;
         synchronized (mFrameSyncObject) {
             while (!mFrameAvailable) {
@@ -211,8 +211,8 @@ class OutputSurface implements SurfaceTexture.OnFrameAvailableListener {
                         throw new RuntimeException("Surface frame wait timed out");
                     }
                 } catch (InterruptedException ie) {
-                    // shouldn't happen
-                    throw new RuntimeException(ie);
+                    Thread.currentThread().interrupt();
+                    throw ie;
                 }
             }
             mFrameAvailable = false;
