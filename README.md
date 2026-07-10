@@ -1,68 +1,24 @@
-android-transcoder
-=================
+# Android Transcoder
 
-Hardware accelerated transcoder for Android, written in pure Java.
+A hardware-accelerated MP4 video transcoder for Android, implemented in Java on top of `MediaExtractor`, `MediaCodec`, and `MediaMuxer`. It is intended for apps that need on-device H.264 video conversion without bundling a native FFmpeg binary.
 
-## Why?
+## Capabilities
 
-Android does not offer straight forward way to transcode video.
-
-FFmpeg is the most famous solution for transcoding. But using [FFmpeg binary on Android](https://github.com/WritingMinds/ffmpeg-android) can cause GPL and/or patent issues. Also using native code for Android development can be troublesome because of cross-compiling, architecture compatibility, build time and binary size.
-
-To transcode without any hassle written above, I created this library to provide hardware accelerated transcoding of H.264 (mp4) video without ffmpeg by using [MediaCodec](https://developer.android.com/intl/ja/reference/android/media/MediaCodec.html).
+- Transcodes the first video track with Android hardware codecs when available.
+- Copies the audio track by default, with experimental audio transcoding support in selected strategies.
+- Supports video-only input files as well as video files with audio.
+- Reports progress, completion, cancellation, and failures through one listener.
+- Produces an MP4 file at a caller-provided output path.
 
 ## Requirements
 
-API Level 18 (Android 4.3, JELLY_BEAN_MR2) or later.
-If your app targets older Android, you should add below line to AndroidManifest.xml:
+The library requires Android API 18 (Android 4.3) or later. The Compose example app requires API 21 or later, but this does not change the library module's API 18 minimum.
 
-```xml
-<!-- Only supports API >= 18 -->
-<uses-sdk tools:overrideLibrary="net.ypresto.androidtranscoder" />
-```
+Input compatibility ultimately depends on codecs installed on the device. The library is designed around MP4/H.264 input and output; test the target resolutions, bitrates, profiles, and devices used by your app.
 
-Please ensure checking Build.VERSION by your self.
+## Add The Library
 
-## Usage
-
-```java
-@Override
-protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-    ParcelFileDescriptor parcelFileDescriptor = resolver.openFileDescriptor(data.getData(), "r");
-    FileDescriptor fileDescriptor = parcelFileDescriptor.getFileDescriptor();
-    MediaTranscoder.Listener listener = new MediaTranscoder.Listener() {
-        @Override
-        public void onTranscodeProgress(double progress) {
-            ...
-        }
-
-        @Override
-        public void onTranscodeCompleted() {
-            startActivity(new Intent(Intent.ACTION_VIEW).setDataAndType(Uri.fromFile(file), "video/mp4"));
-            ...
-        }
-
-        @Override
-        public void onTranscodeFailed(Exception exception) {
-            ...
-        }
-    };
-    MediaTranscoder.getInstance().transcodeVideo(fileDescriptor, file.getAbsolutePath(),
-            MediaFormatStrategyPresets.createAndroid720pStrategy(), listener); // or createAndroid720pStrategy([your bitrate here])
-}
-```
-
-See `TranscoderActivity.kt` in the example directory for a ready-made transcoder app.
-
-## Example App
-
-The `example` module is a Jetpack Compose demo that lets you choose a video, observe transcoding progress, cancel a running job, and open the completed output file. The library itself supports API 18 and later; the Compose-based example app requires API 21 and later.
-
-## Quick Setup
-
-### Gradle
-
-The historical JCenter artifact is no longer published by this fork. Use the local `:lib` module or publish it to your own Maven repository.
+This fork does not publish the historical JCenter artifact. Include the local module, or publish `:lib` to a Maven repository you control.
 
 ```groovy
 dependencies {
@@ -70,27 +26,87 @@ dependencies {
 }
 ```
 
-## Note (PLEASE READ FIRST)
+## Transcode A Video
 
-- This library raises `RuntimeException`s (like `IlleagalStateException`) in various situations. Please catch it and provide alternate logics. I know this is bad design according to Effective Java; just is TODO.
-- Currently this library does not generate streaming-aware mp4 file.
-Use [qtfaststart-java](https://github.com/ypresto/qtfaststart-java) to place moov atom at beginning of file.
-- Android does not gurantees that all devices have bug-free codecs/accelerators for your codec parameters (especially, resolution). Refer [supported media formats](http://developer.android.com/guide/appendix/media-formats.html) for parameters guaranteed by [CTS](https://source.android.com/compatibility/cts-intro.html).
-- This library does not support video files recorded by other device like digital cameras, iOS (mov files, including non-baseline profile h.264), etc.
+Open the source through a `ContentResolver`, create an output file, and retain the returned `Future` when the caller needs cancellation. Close the `ParcelFileDescriptor` in every terminal callback; the transcoder reads from its `FileDescriptor` asynchronously.
 
+```java
+final ParcelFileDescriptor input = getContentResolver()
+        .openFileDescriptor(inputUri, "r");
+final File outputFile = new File(getExternalFilesDir(null), "transcoded.mp4");
 
-## More information about internals
+Future<Void> future = MediaTranscoder.getInstance().transcodeVideo(
+        input.getFileDescriptor(),
+        outputFile.getAbsolutePath(),
+        MediaFormatStrategyPresets.createAndroid720pStrategy(),
+        new MediaTranscoder.Listener() {
+            @Override
+            public void onTranscodeProgress(double progress) {
+                // progress is in [0.0, 1.0]; a negative value means unknown.
+            }
 
-There is a blog post about this library written in Japanese.
-http://qiita.com/yuya_presto/items/d48e29c89109b746d000
+            @Override
+            public void onTranscodeCompleted() {
+                closeInput();
+                // The output file is ready to share or play.
+            }
 
-While it is Japanese, diagrams would be useful for understanding internals of this library.
+            @Override
+            public void onTranscodeCanceled() {
+                closeInput();
+            }
 
-## References for Android Low-Level Media APIs
+            @Override
+            public void onTranscodeFailed(Exception exception) {
+                closeInput();
+                // Report the error and remove any partial output if appropriate.
+            }
 
-- http://bigflake.com/mediacodec/
-- https://github.com/google/grafika
-- https://android.googlesource.com/platform/frameworks/av/+/lollipop-release/media/libstagefright
+            private void closeInput() {
+                try {
+                    input.close();
+                } catch (IOException ignored) {
+                }
+            }
+        });
+```
+
+Call `future.cancel(true)` to request cancellation. The listener reports cancellation through `onTranscodeCanceled()`.
+
+To open an output file outside your app on Android 7.0 and later, use a `FileProvider` content URI and grant read permission instead of using `Uri.fromFile()`.
+
+## Format Strategies
+
+`MediaFormatStrategyPresets` provides ready-made strategies:
+
+- `createAndroid720pStrategy()` or `createAndroid720pStrategy(int bitrate)` for 720p-oriented H.264 output.
+- `createAndroidBitrateFormatStrategy(int bitrate)` for bitrate-oriented output.
+- `createExportPreset960x540Strategy()` for a 960x540 export preset.
+
+Returning `null` from a custom strategy's `createVideoOutputFormat()` or `createAudioOutputFormat()` requests pass-through for that track. When every available track is pass-through, the library rejects the request because no transcoding work is needed.
+
+## Example App
+
+The `example` module is a Jetpack Compose demonstration app. It lets you choose a video, monitor progress, cancel a running job, and open the completed output file.
+
+```bash
+./gradlew :example:assembleDebug
+```
+
+The implementation is in `example/src/main/java/net/ypresto/androidtranscoder/example/TranscoderActivity.kt`.
+
+## Limitations
+
+- Hardware codec availability and behavior vary by device. Validate the codecs and parameters required by your product on real devices.
+- The output MP4 is not optimized for progressive network playback. Use a fast-start tool if the `moov` atom must be placed at the beginning of the file.
+- Encrypted media, streaming output, and arbitrary camera/container formats are not supported.
+- Codec and muxer failures can surface as `RuntimeException`; handle the failure callback and clean up partial output files.
+
+## Further Reading
+
+- [MediaCodec](https://developer.android.com/reference/android/media/MediaCodec)
+- [Grafika](https://github.com/google/grafika)
+- [Original implementation notes (Japanese)](https://qiita.com/yuya_presto/items/d48e29c89109b746d000)
 
 ## License
 
