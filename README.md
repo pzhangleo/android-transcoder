@@ -81,6 +81,7 @@ To open an output file outside your app on Android 7.0 and later, use a `FilePro
 
 - `createAndroid720pStrategy()` or `createAndroid720pStrategy(int bitrate)` for 720p-oriented H.264 output.
 - `createAndroidBitrateFormatStrategy(int bitrate)` for bitrate-oriented output.
+- `createAndroidH265BitrateFormatStrategy(int bitrate)` for H.265/HEVC output on Android API 24 and later.
 - `createExportPreset960x540Strategy()` for a 960x540 export preset.
 
 Returning `null` from a custom strategy's `createVideoOutputFormat()` or `createAudioOutputFormat()` requests pass-through for that track. When every available track is pass-through, the library rejects the request because no transcoding work is needed.

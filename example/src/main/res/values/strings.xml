@@ -4,6 +4,9 @@
     <string name="demo_title">Video Transcoder</string>
     <string name="demo_description">Choose an MP4 video to transcode with MediaTranscoder. Output uses the Android bitrate strategy at 8 Mbps.</string>
     <string name="select_video">Choose video</string>
+    <string name="output_codec">Output codec</string>
+    <string name="codec_h264">H.264 (AVC)</string>
+    <string name="codec_h265">H.265 (HEVC, Android 7.0+)</string>
     <string name="no_video_selected">No input video selected</string>
     <string name="status_ready">Ready to choose a video</string>
     <string name="status_transcoding">Transcoding</string>

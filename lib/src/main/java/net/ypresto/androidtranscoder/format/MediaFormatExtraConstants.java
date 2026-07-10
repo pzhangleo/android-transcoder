@@ -43,6 +43,7 @@ public class MediaFormatExtraConstants {
     // Video formats
     // from MediaFormat of API level >= 21
     public static final String MIMETYPE_VIDEO_AVC = "video/avc";
+    public static final String MIMETYPE_VIDEO_HEVC = "video/hevc";
     public static final String MIMETYPE_VIDEO_H263 = "video/3gpp";
     public static final String MIMETYPE_VIDEO_VP8 = "video/x-vnd.on2.vp8";
 

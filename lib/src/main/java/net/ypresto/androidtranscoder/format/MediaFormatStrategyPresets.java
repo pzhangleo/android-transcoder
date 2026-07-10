@@ -77,6 +77,13 @@ public class MediaFormatStrategyPresets {
     }
 
     /**
+     * Creates an H.265/HEVC output strategy. Requires Android API 24 or later.
+     */
+    public static MediaFormatStrategy createAndroidH265BitrateFormatStrategy(int bitrate) {
+        return new AndroidH265BitrateFormatStrategy(bitrate);
+    }
+
+    /**
      * @deprecated Use {@link #createAndroidBitrateFormatStrategy(int)}.
      */
     @Deprecated

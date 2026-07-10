@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
+import android.os.Build
 import android.provider.OpenableColumns
 import android.util.Log
 import android.widget.Toast
@@ -26,12 +27,13 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValuekotlin
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -61,6 +63,7 @@ class TranscoderActivity : ComponentActivity() {
                     TranscoderDemo(
                         state = uiState,
                         onSelectVideo = ::selectVideo,
+                        onCodecSelected = { useH265 -> uiState = uiState.copy(useH265 = useH265) },
                         onCancel = ::cancelTranscoding,
                         onOpenOutput = ::openOutputVideo
                     )
@@ -70,6 +73,7 @@ class TranscoderActivity : ComponentActivity() {
     }
 
     private fun selectVideo(uri: Uri) {
+        val useH265 = uiState.useH265
         val newOutputFile = createOutputFile()
         if (newOutputFile == null) {
             showError(getString(R.string.status_output_error))
@@ -103,7 +107,8 @@ class TranscoderActivity : ComponentActivity() {
             outputPath = newOutputFile.absolutePath,
             status = getString(R.string.status_transcoding),
             progress = 0f,
-            isTranscoding = true
+            isTranscoding = true,
+            useH265 = useH265
         )
 
         val startTime = SystemClock.uptimeMillis()
@@ -111,7 +116,11 @@ class TranscoderActivity : ComponentActivity() {
         val future = MediaTranscoder.getInstance().transcodeVideo(
             source,
             newOutputFile.absolutePath,
-            MediaFormatStrategyPresets.createAndroidBitrateFormatStrategy(VIDEO_BITRATE),
+            if (useH265) {
+                MediaFormatStrategyPresets.createAndroidH265BitrateFormatStrategy(VIDEO_BITRATE)
+            } else {
+                MediaFormatStrategyPresets.createAndroidBitrateFormatStrategy(VIDEO_BITRATE)
+            },
             object : MediaTranscoder.Listener {
                 override fun onTranscodeProgress(progress: Double) {
                     uiState = uiState.copy(progress = progress.toFloat().takeIf { it >= 0f })
@@ -251,13 +260,15 @@ private data class TranscoderUiState(
     val status: String = "",
     val progress: Float? = 0f,
     val isTranscoding: Boolean = false,
-    val canOpenOutput: Boolean = false
+    val canOpenOutput: Boolean = false,
+    val useH265: Boolean = false
 )
 
 @Composable
 private fun TranscoderDemo(
     state: TranscoderUiState,
     onSelectVideo: (Uri) -> Unit,
+    onCodecSelected: (Boolean) -> Unit,
     onCancel: () -> Unit,
     onOpenOutput: () -> Unit
 ) {
@@ -294,6 +305,22 @@ private fun TranscoderDemo(
             style = MaterialTheme.typography.bodyMedium
         )
 
+        Text(text = stringResource(R.string.output_codec), style = MaterialTheme.typography.titleMedium)
+        Column {
+            CodecChoice(
+                label = stringResource(R.string.codec_h264),
+                selected = !state.useH265,
+                enabled = !state.isTranscoding,
+                onClick = { onCodecSelected(false) }
+            )
+            CodecChoice(
+                label = stringResource(R.string.codec_h265),
+                selected = state.useH265,
+                enabled = !state.isTranscoding && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N,
+                onClick = { onCodecSelected(true) }
+            )
+        }
+
         HorizontalDivider()
         Text(text = state.status, style = MaterialTheme.typography.titleMedium)
         if (state.isTranscoding && state.progress == null) {
@@ -326,6 +353,17 @@ private fun TranscoderDemo(
     }
 }
 
+@Composable
+private fun CodecChoice(label: String, selected: Boolean, enabled: Boolean, onClick: () -> Unit) {
+    androidx.compose.foundation.layout.Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+    ) {
+        RadioButton(selected = selected, enabled = enabled, onClick = onClick)
+        Text(text = label, color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f))
+    }
+}
+
 @Preview(showBackground = true)
 @Composable
 private fun TranscoderDemoPreview() {
@@ -339,6 +377,7 @@ private fun TranscoderDemoPreview() {
                 canOpenOutput = true
             ),
             onSelectVideo = {},
+            onCodecSelected = {},
             onCancel = {},
             onOpenOutput = {}
         )
