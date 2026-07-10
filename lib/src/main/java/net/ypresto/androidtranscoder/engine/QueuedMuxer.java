@@ -33,6 +33,8 @@ public class QueuedMuxer {
     private static final int BUFFER_SIZE = 64 * 1024;
     private final MediaMuxer mMuxer;
     private final Listener mListener;
+    private final FormatListener mFormatListener;
+    private final boolean mHasAudioTrack;
     private MediaFormat mVideoFormat;
     private MediaFormat mAudioFormat;
     private int mVideoTrackIndex;
@@ -42,12 +44,32 @@ public class QueuedMuxer {
     private boolean mStarted;
 
     public QueuedMuxer(MediaMuxer muxer, Listener listener) {
+        this(muxer, listener, null, true);
+    }
+
+    public QueuedMuxer(MediaMuxer muxer, Listener listener, boolean hasAudioTrack) {
+        this(muxer, listener, null, hasAudioTrack);
+    }
+
+    QueuedMuxer(MediaMuxer muxer, FormatListener formatListener, boolean hasAudioTrack) {
+        this(muxer, null, formatListener, hasAudioTrack);
+    }
+
+    private QueuedMuxer(MediaMuxer muxer, Listener listener, FormatListener formatListener, boolean hasAudioTrack) {
         mMuxer = muxer;
         mListener = listener;
+        mFormatListener = formatListener;
+        mHasAudioTrack = hasAudioTrack;
         mSampleInfoList = new ArrayList<>();
     }
 
     public void setOutputFormat(SampleType sampleType, MediaFormat format) {
+        if (format == null) {
+            throw new NullPointerException("Output format cannot be null.");
+        }
+        if (mStarted) {
+            throw new IllegalStateException("Output format has already been determined.");
+        }
         switch (sampleType) {
             case VIDEO:
                 mVideoFormat = format;
@@ -62,13 +84,19 @@ public class QueuedMuxer {
     }
 
     private void onSetOutputFormat() {
-        if (mVideoFormat == null || mAudioFormat == null) return;
-        mListener.onDetermineOutputFormat();
+        if (mVideoFormat == null || (mHasAudioTrack && mAudioFormat == null)) return;
+        if (mFormatListener != null) {
+            mFormatListener.onDetermineOutputFormat(mVideoFormat, mAudioFormat);
+        } else {
+            mListener.onDetermineOutputFormat();
+        }
 
         mVideoTrackIndex = mMuxer.addTrack(mVideoFormat);
         Log.v(TAG, "Added track #" + mVideoTrackIndex + " with " + mVideoFormat.getString(MediaFormat.KEY_MIME) + " to muxer");
-        mAudioTrackIndex = mMuxer.addTrack(mAudioFormat);
-        Log.v(TAG, "Added track #" + mAudioTrackIndex + " with " + mAudioFormat.getString(MediaFormat.KEY_MIME) + " to muxer");
+        if (mHasAudioTrack) {
+            mAudioTrackIndex = mMuxer.addTrack(mAudioFormat);
+            Log.v(TAG, "Added track #" + mAudioTrackIndex + " with " + mAudioFormat.getString(MediaFormat.KEY_MIME) + " to muxer");
+        }
         mMuxer.start();
         mStarted = true;
 
@@ -90,6 +118,9 @@ public class QueuedMuxer {
     }
 
     public void writeSampleData(SampleType sampleType, ByteBuffer byteBuf, MediaCodec.BufferInfo bufferInfo) {
+        if (sampleType == SampleType.AUDIO && !mHasAudioTrack) {
+            throw new IllegalArgumentException("Input does not contain an audio track.");
+        }
         if (mStarted) {
             mMuxer.writeSampleData(getTrackIndexForSampleType(sampleType), byteBuf, bufferInfo);
             return;
@@ -151,5 +182,9 @@ public class QueuedMuxer {
 
     public interface Listener {
         void onDetermineOutputFormat();
+    }
+
+    interface FormatListener {
+        void onDetermineOutputFormat(MediaFormat videoFormat, MediaFormat audioFormat);
     }
 }

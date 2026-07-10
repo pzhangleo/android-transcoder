@@ -36,7 +36,10 @@ public class MediaExtractorUtils {
         public MediaFormat mAudioTrackFormat;
     }
 
-    public static TrackResult getFirstVideoAndAudioTrack(MediaExtractor extractor) {
+    /**
+     * Returns the first video track and, when present, the first audio track.
+     */
+    public static TrackResult getFirstVideoAndOptionalAudioTrack(MediaExtractor extractor) {
         TrackResult trackResult = new TrackResult();
         trackResult.mVideoTrackIndex = -1;
         trackResult.mAudioTrackIndex = -1;
@@ -55,8 +58,20 @@ public class MediaExtractorUtils {
             }
             if (trackResult.mVideoTrackIndex >= 0 && trackResult.mAudioTrackIndex >= 0) break;
         }
-        if (trackResult.mVideoTrackIndex < 0 || trackResult.mAudioTrackIndex < 0) {
-            throw new IllegalArgumentException("extractor does not contain video and/or audio tracks.");
+        if (trackResult.mVideoTrackIndex < 0) {
+            throw new IllegalArgumentException("extractor does not contain a video track.");
+        }
+        return trackResult;
+    }
+
+    /**
+     * @deprecated Use {@link #getFirstVideoAndOptionalAudioTrack(MediaExtractor)}.
+     */
+    @Deprecated
+    public static TrackResult getFirstVideoAndAudioTrack(MediaExtractor extractor) {
+        TrackResult trackResult = getFirstVideoAndOptionalAudioTrack(extractor);
+        if (trackResult.mAudioTrackIndex < 0) {
+            throw new IllegalArgumentException("extractor does not contain an audio track.");
         }
         return trackResult;
     }
