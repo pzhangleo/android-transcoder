@@ -1,8 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-
-    <string name="app_name">android-transcoder</string>
-    <string name="hello_world">Hello world!</string>
-    <string name="action_settings">Settings</string>
-
+    <string name="app_name">Android Transcoder Demo</string>
+    <string name="demo_title">Video Transcoder</string>
+    <string name="demo_description">Choose an MP4 video to transcode with MediaTranscoder. Output uses the Android bitrate strategy at 8 Mbps.</string>
+    <string name="select_video">Choose video</string>
+    <string name="no_video_selected">No input video selected</string>
+    <string name="status_ready">Ready to choose a video</string>
+    <string name="status_transcoding">Transcoding</string>
+    <string name="status_cancelling">Cancelling transcoding</string>
+    <string name="status_completed">Completed</string>
+    <string name="status_canceled">Canceled</string>
+    <string name="status_failed">Failed: %1$s</string>
+    <string name="status_output_error">Unable to create the output file</string>
+    <string name="status_input_error">Unable to open the selected video</string>
+    <string name="progress_not_started">Not started</string>
+    <string name="progress_unknown">Working</string>
+    <string name="progress_percent">%1$d%%</string>
+    <string name="cancel_transcoding">Cancel transcoding</string>
+    <string name="open_output">Open output video</string>
+    <string name="no_output_created">No output video created</string>
+    <string name="output_file">Output: %1$s</string>
+    <string name="no_video_player">No app can open this video</string>
 </resources>

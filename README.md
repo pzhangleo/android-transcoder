@@ -52,7 +52,11 @@ protected void onActivityResult(int requestCode, int resultCode, Intent data) {
 }
 ```
 
-See `TranscoderActivity.java` in example directory for ready-made transcoder app.
+See `TranscoderActivity.kt` in the example directory for a ready-made transcoder app.
+
+## Example App
+
+The `example` module is a Jetpack Compose demo that lets you choose a video, observe transcoding progress, cancel a running job, and open the completed output file. The library itself supports API 18 and later; the Compose-based example app requires API 21 and later.
 
 ## Quick Setup
 
