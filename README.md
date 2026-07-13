@@ -104,11 +104,12 @@ an HEVC track in an MP4 muxer. Devices may still reject HEVC because the
 required encoder or profile is unavailable; handle `onTranscodeFailed()` and
 fall back to H.264 when the target device cannot encode HEVC.
 
-The optional `:native-h265` module is a separate integration boundary and is not
-automatically used by `:lib`. Its current implementation is a buildable JNI
-stub, so `NativeH265Codec.isAvailable()` remains `false` until a real codec
-provider is linked. Adding FFmpeg, x265, or another provider requires separate
-source, binary, patent, and license review.
+The optional `:native-h265` module is a separate GPL-2.0-only integration
+boundary and is not automatically used by `:lib`. It now builds x265 3.4 and
+exposes a low-level I420-to-Annex-B encoder. The higher-level
+`MediaExtractor -> MediaCodec -> x265 -> MediaMuxer` fallback pipeline is still
+being connected. Adding or distributing x265 requires separate source, binary,
+patent, and license review.
 
 ## Example App
 
@@ -131,7 +132,7 @@ choose H.264 or provide an application-specific native codec integration.
 
 ## Optional Native H.265 Module
 
-The `native-h265` module is a separate GPL-2.0-only integration boundary targeting API 21+. The main `:lib` module remains Apache 2.0. The native module currently contains a JNI stub only; it does not bundle FFmpeg, x265, libde265, or prebuilt codec binaries. Add the chosen codec provider and its complete license/source notices before enabling software H.265 encoding.
+The `native-h265` module is a separate GPL-2.0-only integration boundary targeting API 21+. The main `:lib` module remains Apache 2.0. The module builds x265 3.4 from a pinned upstream commit and exposes a low-level native encoder. It does not bundle an H.265 decoder or automatically replace the `:lib` MediaCodec pipeline yet.
 
 ```bash
 ./gradlew :native-h265:assembleDebug

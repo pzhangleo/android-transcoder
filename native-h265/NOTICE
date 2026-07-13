@@ -1,6 +1,12 @@
 native-h265 is a separate GPL-2.0-only module.
 
-No third-party codec implementation is bundled in this repository. If FFmpeg,
-x265, libde265, or another provider is added, its source, copyright notices,
-license text, build configuration, and corresponding source availability must be
-documented here and distributed according to its license.
+The native build fetches x265 from the official upstream repository at the
+following pinned commit (release 3.4):
+
+https://github.com/videolan/x265/tree/07295ba7ab551bb9c1580fdaee3200f1b45711b7
+
+x265 is Copyright (C) MulticoreWare, Inc. and contributors, and is available
+under GPLv2. Its source and license are retrieved by CMake during the native
+build. See the x265 source `COPYING` file and official legal notices for the
+complete terms. Future codec dependencies must add their own source, notices,
+license text, and corresponding source availability here.

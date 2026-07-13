@@ -42,15 +42,20 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import net.ypresto.androidtranscoder.MediaTranscoder
 import net.ypresto.androidtranscoder.format.MediaFormatStrategyPresets
+import net.ypresto.androidtranscoder.nativeh265.NativeH265Codec
+import net.ypresto.androidtranscoder.nativeh265.NativeH265Transcoder
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
 import java.util.concurrent.Future
+import java.util.concurrent.Executors
 import kotlin.math.roundToInt
 
 class TranscoderActivity : ComponentActivity() {
     private var uiState by mutableStateOf(TranscoderUiState())
     private var transcodeFuture: Future<Void>? = null
+    private var nativeTranscodeFuture: Future<*>? = null
+    private val nativeExecutor = Executors.newSingleThreadExecutor()
     private var inputFileDescriptor: ParcelFileDescriptor? = null
     private var outputFile: File? = null
 
@@ -111,8 +116,33 @@ class TranscoderActivity : ComponentActivity() {
             useH265 = useH265
         )
 
-        val startTime = SystemClock.uptimeMillis()
         val source = descriptor.fileDescriptor
+        if (useH265 && NativeH265Codec.isAvailable()) {
+            val startTime = SystemClock.uptimeMillis()
+            nativeTranscodeFuture = nativeExecutor.submit {
+                try {
+                    NativeH265Transcoder.transcode(source, newOutputFile.absolutePath, VIDEO_BITRATE)
+                    runOnUiThread {
+                        Log.d(TAG, "Native H.265 transcoding completed in ${SystemClock.uptimeMillis() - startTime}ms")
+                        finishTranscoding(succeeded = true, status = getString(R.string.status_completed))
+                    }
+                } catch (exception: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    runOnUiThread {
+                        finishTranscoding(succeeded = false, status = getString(R.string.status_canceled))
+                    }
+                } catch (exception: Exception) {
+                    Log.e(TAG, "Native H.265 transcoding failed", exception)
+                    runOnUiThread {
+                        val detail = exception.message ?: exception.javaClass.simpleName
+                        finishTranscoding(succeeded = false, status = getString(R.string.status_failed, detail))
+                    }
+                }
+            }
+            return
+        }
+
+        val startTime = SystemClock.uptimeMillis()
         val future = MediaTranscoder.getInstance().transcodeVideo(
             source,
             newOutputFile.absolutePath,
@@ -152,11 +182,16 @@ class TranscoderActivity : ComponentActivity() {
             uiState = uiState.copy(status = getString(R.string.status_cancelling))
             it.cancel(true)
         }
+        nativeTranscodeFuture?.let {
+            uiState = uiState.copy(status = getString(R.string.status_cancelling))
+            it.cancel(true)
+        }
     }
 
     private fun finishTranscoding(succeeded: Boolean, status: String) {
         closeInputFileDescriptor()
         transcodeFuture = null
+        nativeTranscodeFuture = null
         if (succeeded) {
             uiState = uiState.copy(
                 status = status,
@@ -243,7 +278,9 @@ class TranscoderActivity : ComponentActivity() {
     override fun onDestroy() {
         if (isFinishing) {
             transcodeFuture?.cancel(true)
+            nativeTranscodeFuture?.cancel(true)
         }
+        nativeExecutor.shutdownNow()
         super.onDestroy()
     }
 
@@ -316,7 +353,8 @@ private fun TranscoderDemo(
             CodecChoice(
                 label = stringResource(R.string.codec_h265),
                 selected = state.useH265,
-                enabled = !state.isTranscoding && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N,
+                enabled = !state.isTranscoding && (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N
+                    || NativeH265Codec.isAvailable()),
                 onClick = { onCodecSelected(true) }
             )
         }
