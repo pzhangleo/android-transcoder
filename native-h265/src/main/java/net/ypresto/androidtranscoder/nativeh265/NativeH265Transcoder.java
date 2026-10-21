@@ -6,42 +6,95 @@
 package net.ypresto.androidtranscoder.nativeh265;
 
 import android.graphics.ImageFormat;
+import android.graphics.Rect;
 import android.media.Image;
 import android.media.MediaCodec;
 import android.media.MediaExtractor;
 import android.media.MediaFormat;
+import android.media.MediaMetadataRetriever;
 import android.media.MediaMuxer;
-import android.os.Build;
+import android.util.Log;
 
+import java.io.File;
 import java.io.FileDescriptor;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
- * Software HEVC fallback for API 21+. Video is decoded by Android and encoded
- * by x265. Audio is copied without re-encoding.
+ * Software HEVC fallback for API 21+. Video is decoded by Android and encoded by x265, audio is
+ * copied without re-encoding.
+ *
+ * <p>The pipeline is synchronous; run it on a worker thread and keep the input descriptor open
+ * until the call returns. Pass a {@link ProgressListener} to receive rough progress updates.</p>
  */
 public final class NativeH265Transcoder {
+    private static final String TAG = "NativeH265Transcoder";
     private static final int TIMEOUT_US = 10_000;
-    private static final int MAX_DRAIN_LOOPS = 100;
+    private static final int MAX_DRAIN_LOOPS = 500;
+    /**
+     * x265 emits VPS/SPS/PPS before the first frame. If that does not happen within this many
+     * samples something is badly wrong, so fail instead of buffering the whole movie in RAM.
+     */
+    private static final int MAX_PENDING_SAMPLES = 120;
+    private static final String MIME_HEVC = "video/hevc";
+
+    // HEVC NAL unit types that carry parameter sets.
+    private static final int NAL_VPS = 32;
+    private static final int NAL_SPS = 33;
+    private static final int NAL_PPS = 34;
 
     private NativeH265Transcoder() {
     }
 
+    /** Rough progress callback, invoked on the calling thread. */
+    public interface ProgressListener {
+        /**
+         * @param progress value in [0.0, 1.0]; 1.0 is reported once the video track is written.
+         */
+        void onProgress(double progress);
+    }
+
     public static void transcode(FileDescriptor input, String outputPath, int bitrate)
+            throws IOException, InterruptedException {
+        transcode(input, outputPath, bitrate, null);
+    }
+
+    public static void transcode(FileDescriptor input, String outputPath, int bitrate,
+                                 ProgressListener listener)
             throws IOException, InterruptedException {
         if (!NativeH265Codec.isAvailable()) {
             throw new IOException("x265 native codec is unavailable");
+        }
+        if (outputPath == null) {
+            throw new NullPointerException("outputPath cannot be null");
         }
 
         MediaExtractor videoExtractor = new MediaExtractor();
         MediaExtractor audioExtractor = new MediaExtractor();
         MediaCodec decoder = null;
-        NativeH265Encoder encoder = null;
         MediaMuxer muxer = null;
+        VideoOutput output = null;
+        boolean completed = false;
         try {
+            int rotation = 0;
+            long durationUs = 0;
+            MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+            try {
+                retriever.setDataSource(input);
+                rotation = readIntMetadata(retriever,
+                        MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION, 0);
+                durationUs = readIntMetadata(retriever,
+                        MediaMetadataRetriever.METADATA_KEY_DURATION, 0) * 1000L;
+            } catch (RuntimeException e) {
+                Log.w(TAG, "Could not read input metadata; continuing without rotation/duration.", e);
+            } finally {
+                retriever.release();
+            }
+
             videoExtractor.setDataSource(input);
             audioExtractor.setDataSource(input);
             int videoTrack = selectTrack(videoExtractor, true);
@@ -52,8 +105,6 @@ public final class NativeH265Transcoder {
 
             MediaFormat inputFormat = videoExtractor.getTrackFormat(videoTrack);
             String inputMime = inputFormat.getString(MediaFormat.KEY_MIME);
-            int width = inputFormat.getInteger(MediaFormat.KEY_WIDTH);
-            int height = inputFormat.getInteger(MediaFormat.KEY_HEIGHT);
             int frameRate = inputFormat.containsKey(MediaFormat.KEY_FRAME_RATE)
                     ? inputFormat.getInteger(MediaFormat.KEY_FRAME_RATE) : 30;
             frameRate = Math.max(1, Math.min(frameRate, 60));
@@ -61,25 +112,35 @@ public final class NativeH265Transcoder {
             decoder = MediaCodec.createDecoderByType(inputMime);
             decoder.configure(inputFormat, null, null, 0);
             decoder.start();
-            encoder = new NativeH265Encoder(width, height, bitrate, frameRate);
+
             muxer = new MediaMuxer(outputPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
+            if (rotation != 0) {
+                // Portrait clips are stored landscape plus a rotation hint. Without writing it the
+                // output plays sideways, because the native path re-encodes raw pixels.
+                muxer.setOrientationHint(rotation);
+            }
 
             int audioTrack = selectTrack(audioExtractor, false);
             if (audioTrack >= 0) {
                 audioExtractor.selectTrack(audioTrack);
             }
 
-            VideoOutput output = new VideoOutput(muxer, width, height, frameRate);
+            output = new VideoOutput(muxer, frameRate);
             if (audioTrack >= 0) {
                 output.audioTrack = muxer.addTrack(audioExtractor.getTrackFormat(audioTrack));
             }
 
-            decodeAndEncode(videoExtractor, decoder, encoder, output);
+            decodeAndEncode(videoExtractor, decoder, output, bitrate, frameRate, durationUs, listener);
             if (!output.started) {
                 throw new IOException("x265 produced no video output");
             }
             copyAudio(audioExtractor, output, audioTrack);
+            if (listener != null) {
+                listener.onProgress(1.0);
+            }
+            completed = true;
         } finally {
+            // Release order matters: codec first, then the muxer, then the extractors.
             if (decoder != null) {
                 try {
                     decoder.stop();
@@ -87,84 +148,157 @@ public final class NativeH265Transcoder {
                 }
                 decoder.release();
             }
-            if (encoder != null) {
-                encoder.close();
+            if (output != null) {
+                output.finish();
             }
             if (muxer != null) {
-                try {
-                    muxer.stop();
-                } catch (RuntimeException ignored) {
-                }
                 muxer.release();
             }
             videoExtractor.release();
             audioExtractor.release();
+            if (!completed) {
+                // A failed transcode must not leave a 0-byte or truncated MP4 behind: the caller
+                // would otherwise see "transcode failed" next to a file that looks valid.
+                deleteQuietly(outputPath);
+            }
+        }
+    }
+
+    private static int readIntMetadata(MediaMetadataRetriever retriever, int key, int fallback) {
+        String value = retriever.extractMetadata(key);
+        if (value == null) return fallback;
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            return fallback;
+        }
+    }
+
+    private static void deleteQuietly(String path) {
+        File file = new File(path);
+        if (file.exists() && !file.delete()) {
+            Log.w(TAG, "Failed to delete partial output file: " + path);
         }
     }
 
     private static void decodeAndEncode(MediaExtractor extractor, MediaCodec decoder,
-                                        NativeH265Encoder encoder, VideoOutput output)
+                                        VideoOutput output, int bitrate, int frameRate,
+                                        long durationUs, ProgressListener listener)
             throws IOException, InterruptedException {
         boolean inputDone = false;
         boolean outputDone = false;
         MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
-        long frameIndex = 0;
+        NativeH265Encoder encoder = null;
+        byte[] i420 = null;
+        long lastPtsUs = 0;
+        long frameDurationUs = 1_000_000L / Math.max(1, frameRate);
+        int decodedFrames = 0;
 
-        while (!outputDone) {
-            if (Thread.interrupted()) {
-                throw new InterruptedException();
-            }
-            if (!inputDone) {
-                int inputIndex = decoder.dequeueInputBuffer(TIMEOUT_US);
-                if (inputIndex >= 0) {
-                    ByteBuffer buffer = decoder.getInputBuffer(inputIndex);
-                    int size = extractor.readSampleData(buffer, 0);
-                    if (size < 0) {
-                        decoder.queueInputBuffer(inputIndex, 0, 0, 0,
-                                MediaCodec.BUFFER_FLAG_END_OF_STREAM);
-                        inputDone = true;
-                    } else {
-                        decoder.queueInputBuffer(inputIndex, 0, size,
-                                extractor.getSampleTime(), 0);
-                        extractor.advance();
+        try {
+            while (!outputDone) {
+                if (Thread.interrupted()) {
+                    throw new InterruptedException("HEVC transcode cancelled");
+                }
+                if (!inputDone) {
+                    int inputIndex = decoder.dequeueInputBuffer(TIMEOUT_US);
+                    if (inputIndex >= 0) {
+                        ByteBuffer buffer = decoder.getInputBuffer(inputIndex);
+                        int size = buffer == null ? -1 : extractor.readSampleData(buffer, 0);
+                        if (size < 0) {
+                            decoder.queueInputBuffer(inputIndex, 0, 0, 0,
+                                    MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+                            inputDone = true;
+                        } else {
+                            decoder.queueInputBuffer(inputIndex, 0, size,
+                                    extractor.getSampleTime(), 0);
+                            extractor.advance();
+                        }
                     }
                 }
-            }
 
-            int outputIndex = decoder.dequeueOutputBuffer(info, TIMEOUT_US);
-            if (outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED
-                    || outputIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                continue;
-            }
-            if (outputIndex < 0) {
-                continue;
-            }
-
-            Image image = Build.VERSION.SDK_INT >= 21 ? decoder.getOutputImage(outputIndex) : null;
-            if (image != null && image.getFormat() == ImageFormat.YUV_420_888) {
-                byte[] i420 = toI420(image);
-                byte[] packet = encoder.encode(i420, info.presentationTimeUs);
-                if (packet != null) {
-                    output.writeVideo(packet, info.presentationTimeUs);
+                int outputIndex = decoder.dequeueOutputBuffer(info, TIMEOUT_US);
+                if (outputIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                    continue;
                 }
-                image.close();
-                frameIndex++;
-            }
-            decoder.releaseOutputBuffer(outputIndex, false);
-            if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-                outputDone = true;
-            }
-        }
+                if (outputIndex < 0) {
+                    // INFO_OUTPUT_FORMAT_CHANGED / INFO_OUTPUT_BUFFERS_CHANGED
+                    continue;
+                }
 
-        for (int i = 0; i < MAX_DRAIN_LOOPS; i++) {
-            byte[] packet = encoder.drain();
-            if (packet == null) {
-                break;
+                Image image = null;
+                try {
+                    image = decoder.getOutputImage(outputIndex);
+                    if (image == null) {
+                        throw new IOException("Decoder returned no output Image. The device may only"
+                                + " support surface output for " + decoder.getName());
+                    }
+                    if (image.getFormat() != ImageFormat.YUV_420_888) {
+                        throw new IOException("Unsupported decoder output color format 0x"
+                                + Integer.toHexString(image.getFormat())
+                                + "; YUV_420_888 (flexible YUV) is required");
+                    }
+                    Rect crop = image.getCropRect();
+                    if (crop == null) {
+                        crop = new Rect(0, 0, image.getWidth(), image.getHeight());
+                    }
+                    // I420 needs even dimensions. The crop rect is authoritative because decoders
+                    // pad the coded size (e.g. 1088 for a 1080p stream).
+                    int width = crop.width() & ~1;
+                    int height = crop.height() & ~1;
+                    if (width <= 0 || height <= 0) {
+                        throw new IOException("Invalid crop rect " + crop);
+                    }
+                    int frameSize = width * height * 3 / 2;
+                    if (i420 == null || i420.length != frameSize) {
+                        i420 = new byte[frameSize];
+                    }
+                    if (encoder == null) {
+                        encoder = new NativeH265Encoder(width, height, bitrate, frameRate);
+                        output.setVideoSize(width, height);
+                    }
+                    toI420(image, crop, width, height, i420);
+                    long ptsUs = info.presentationTimeUs;
+                    byte[] packet = encoder.encode(i420, ptsUs);
+                    if (packet != null) {
+                        output.writeVideo(packet, ptsUs);
+                    }
+                    lastPtsUs = ptsUs;
+                    decodedFrames++;
+                    if (listener != null && durationUs > 0) {
+                        listener.onProgress(Math.min(1.0, (double) ptsUs / durationUs));
+                    }
+                } finally {
+                    // Closing the Image is mandatory: without it the decoder's buffer pool is
+                    // exhausted after a few dozen frames and decoding stalls forever.
+                    if (image != null) {
+                        image.close();
+                    }
+                    decoder.releaseOutputBuffer(outputIndex, false);
+                }
+                if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                    outputDone = true;
+                }
             }
-            output.writeVideo(packet, 0);
-        }
-        if (frameIndex == 0) {
-            throw new IOException("Decoder produced no YUV frames");
+
+            if (decodedFrames == 0) {
+                throw new IOException("Decoder produced no YUV frames");
+            }
+
+            // Drain frames still buffered inside x265. Their timestamps must continue the timeline;
+            // writing 0 for all of them (the previous behaviour) corrupts the end of the file.
+            long drainPtsUs = lastPtsUs;
+            for (int i = 0; i < MAX_DRAIN_LOOPS; i++) {
+                byte[] packet = encoder.drain();
+                if (packet == null) {
+                    break;
+                }
+                drainPtsUs += frameDurationUs;
+                output.writeVideo(packet, drainPtsUs);
+            }
+        } finally {
+            if (encoder != null) {
+                encoder.close();
+            }
         }
     }
 
@@ -176,6 +310,10 @@ public final class NativeH265Transcoder {
         ByteBuffer buffer = ByteBuffer.allocateDirect(256 * 1024);
         MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
         while (true) {
+            if (Thread.interrupted()) {
+                throw new IOException("HEVC transcode cancelled during audio copy");
+            }
+            buffer.clear();
             int size = extractor.readSampleData(buffer, 0);
             if (size < 0) {
                 return;
@@ -198,119 +336,211 @@ public final class NativeH265Transcoder {
         return -1;
     }
 
-    private static byte[] toI420(Image image) {
-        int width = image.getWidth();
-        int height = image.getHeight();
-        byte[] result = new byte[width * height * 3 / 2];
-        copyPlane(image.getPlanes()[0], width, height, result, 0, 1);
-        copyPlane(image.getPlanes()[1], width / 2, height / 2, result, width * height, 1);
-        copyPlane(image.getPlanes()[2], width / 2, height / 2, result,
-                width * height + width * height / 4, 1);
-        return result;
+    /**
+     * Copies one plane of a YUV_420_888 {@link Image} into a tightly packed I420 buffer.
+     * Uses a bulk row copy whenever the plane is not interleaved, which is the usual case.
+     */
+    private static void copyPlane(ByteBuffer planeBuffer, int rowStride, int pixelStride,
+                                  int srcLeft, int srcTop, int width, int height,
+                                  byte[] dst, int dstOffset) {
+        ByteBuffer src = planeBuffer.duplicate();
+        if (pixelStride == 1) {
+            for (int row = 0; row < height; row++) {
+                src.position((srcTop + row) * rowStride + srcLeft);
+                src.get(dst, dstOffset + row * width, width);
+            }
+        } else {
+            for (int row = 0; row < height; row++) {
+                int srcRowStart = (srcTop + row) * rowStride + srcLeft * pixelStride;
+                int dstRowStart = dstOffset + row * width;
+                for (int col = 0; col < width; col++) {
+                    dst[dstRowStart + col] = src.get(srcRowStart + col * pixelStride);
+                }
+            }
+        }
     }
 
-    private static void copyPlane(Image.Plane plane, int width, int height,
-                                  byte[] output, int outputOffset, int outputPixelStride) {
-        ByteBuffer buffer = plane.getBuffer().duplicate();
-        int rowStride = plane.getRowStride();
-        int pixelStride = plane.getPixelStride();
-        for (int row = 0; row < height; row++) {
-            int rowOffset = row * rowStride;
-            for (int col = 0; col < width; col++) {
-                int source = rowOffset + col * pixelStride;
-                output[outputOffset + row * width * outputPixelStride + col * outputPixelStride]
-                        = buffer.get(source);
+    private static void toI420(Image image, Rect crop, int width, int height, byte[] dst) {
+        Image.Plane[] planes = image.getPlanes();
+        int uvWidth = width / 2;
+        int uvHeight = height / 2;
+        copyPlane(planes[0].getBuffer(), planes[0].getRowStride(), planes[0].getPixelStride(),
+                crop.left, crop.top, width, height, dst, 0);
+        copyPlane(planes[1].getBuffer(), planes[1].getRowStride(), planes[1].getPixelStride(),
+                crop.left / 2, crop.top / 2, uvWidth, uvHeight, dst, width * height);
+        copyPlane(planes[2].getBuffer(), planes[2].getRowStride(), planes[2].getPixelStride(),
+                crop.left / 2, crop.top / 2, uvWidth, uvHeight, dst,
+                width * height + uvWidth * uvHeight);
+    }
+
+    /** Splits an Annex-B buffer into NAL units as {@code {offset, length}} pairs. */
+    static List<int[]> splitNals(byte[] data) {
+        List<int[]> nals = new ArrayList<>();
+        int startCode = indexOfStartCode(data, 0);
+        while (startCode >= 0) {
+            int nalStart = startCode + 3;
+            int nextStartCode = indexOfStartCode(data, nalStart);
+            int nalEnd = nextStartCode < 0 ? data.length : nextStartCode;
+            // A 4-byte start code (00 00 00 01) is matched at its second zero, so that extra zero
+            // belongs to the next start code rather than to this NAL unit.
+            if (nextStartCode > nalStart && data[nextStartCode - 1] == 0) {
+                nalEnd = nextStartCode - 1;
             }
+            if (nalEnd > nalStart) {
+                nals.add(new int[]{nalStart, nalEnd - nalStart});
+            }
+            startCode = nextStartCode;
+        }
+        return nals;
+    }
+
+    private static int indexOfStartCode(byte[] data, int from) {
+        for (int i = Math.max(0, from); i + 2 < data.length; i++) {
+            if (data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static int nalType(byte[] data, int[] nal) {
+        return (data[nal[0]] & 0x7e) >> 1;
+    }
+
+    /**
+     * True for BLA/IDR/CRA pictures. Those must be flagged as sync samples, otherwise the MP4
+     * contains no key frames at all and players cannot seek, or even start decoding reliably.
+     */
+    static boolean isKeyFrame(byte[] packet) {
+        for (int[] nal : splitNals(packet)) {
+            int type = nalType(packet, nal);
+            if (type >= 16 && type <= 21) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static final class PendingSample {
+        private final byte[] data;
+        private final long ptsUs;
+
+        private PendingSample(byte[] data, long ptsUs) {
+            this.data = data;
+            this.ptsUs = ptsUs;
         }
     }
 
     private static final class VideoOutput {
+        private static final int MAX_PENDING_BYTES = 64 * 1024 * 1024;
+
         private final MediaMuxer muxer;
-        private final int width;
-        private final int height;
         private final int frameRate;
-        private final List<byte[]> pendingPackets = new ArrayList<>();
+        private final List<PendingSample> pending = new ArrayList<>();
+        private final List<byte[]> parameterSets = new ArrayList<>();
+        private final Set<Integer> parameterSetTypes = new HashSet<>();
+        private final MediaCodec.BufferInfo bufferInfo = new MediaCodec.BufferInfo();
+        private int width;
+        private int height;
+        private long pendingBytes;
         private int audioTrack = -1;
         private int videoTrack = -1;
         private boolean started;
 
-        private VideoOutput(MediaMuxer muxer, int width, int height, int frameRate) {
+        private VideoOutput(MediaMuxer muxer, int frameRate) {
             this.muxer = muxer;
-            this.width = width;
-            this.height = height;
             this.frameRate = frameRate;
         }
 
-        private void writeVideo(byte[] packet, long pts) throws IOException {
+        private void setVideoSize(int width, int height) {
+            this.width = width;
+            this.height = height;
+        }
+
+        private void writeVideo(byte[] packet, long ptsUs) throws IOException {
             if (!started) {
-                pendingPackets.add(packet);
-                List<byte[]> parameterSets = findParameterSets(packet);
-                if (parameterSets.size() >= 3) {
-                    MediaFormat format = MediaFormat.createVideoFormat("video/hevc", width, height);
-                    format.setInteger(MediaFormat.KEY_FRAME_RATE, frameRate);
-                    format.setByteBuffer("csd-0", ByteBuffer.wrap(join(parameterSets)));
-                    videoTrack = muxer.addTrack(format);
-                    muxer.start();
-                    started = true;
-                    for (byte[] pending : pendingPackets) {
-                        writeAnnexB(pending, 0);
+                collectParameterSets(packet);
+                if (parameterSets.size() < 3) {
+                    if (pending.size() >= MAX_PENDING_SAMPLES || pendingBytes >= MAX_PENDING_BYTES) {
+                        throw new IOException("x265 did not emit VPS/SPS/PPS within "
+                                + pending.size() + " samples; refusing to buffer more");
                     }
-                    pendingPackets.clear();
+                    pending.add(new PendingSample(packet, ptsUs));
+                    pendingBytes += packet.length;
+                    return;
                 }
-                return;
+                startMuxer();
+                flushPending();
             }
-            writeAnnexB(packet, pts);
+            writeSample(packet, ptsUs);
         }
 
-        private void writeAnnexB(byte[] packet, long pts) {
-            ByteBuffer buffer = ByteBuffer.wrap(packet);
-            MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
-            info.set(0, packet.length, pts, 0);
-            muxer.writeSampleData(videoTrack, buffer, info);
-        }
-
-        private static List<byte[]> findParameterSets(byte[] packet) {
-            List<byte[]> result = new ArrayList<>();
-            int start = 0;
-            while (start < packet.length) {
-                int next = findStartCode(packet, start + 3);
-                int end = next < 0 ? packet.length : next;
-                int code = packet[start + 2] == 1 ? 3 : 4;
-                if (start + code < end) {
-                    int type = (packet[start + code] & 0x7e) >> 1;
-                    if (type == 32 || type == 33 || type == 34) {
-                        byte[] nal = new byte[end - start];
-                        System.arraycopy(packet, start, nal, 0, nal.length);
-                        result.add(nal);
-                    }
+        /** Parameter sets may be spread over several packets, so accumulate them by NAL type. */
+        private void collectParameterSets(byte[] packet) {
+            for (int[] nal : splitNals(packet)) {
+                int type = nalType(packet, nal);
+                if (type != NAL_VPS && type != NAL_SPS && type != NAL_PPS) {
+                    continue;
                 }
-                start = next < 0 ? packet.length : next;
-            }
-            return result;
-        }
-
-        private static int findStartCode(byte[] data, int offset) {
-            for (int i = offset; i + 3 < data.length; i++) {
-                if (data[i] == 0 && data[i + 1] == 0
-                        && (data[i + 2] == 1 || (data[i + 2] == 0 && data[i + 3] == 1))) {
-                    return i;
+                if (!parameterSetTypes.add(type)) {
+                    continue;
                 }
+                byte[] copy = new byte[nal[1]];
+                System.arraycopy(packet, nal[0], copy, 0, nal[1]);
+                parameterSets.add(copy);
             }
-            return -1;
         }
 
-        private static byte[] join(List<byte[]> parts) {
+        private void startMuxer() {
+            MediaFormat format = MediaFormat.createVideoFormat(MIME_HEVC, width, height);
+            format.setInteger(MediaFormat.KEY_FRAME_RATE, frameRate);
+            format.setByteBuffer("csd-0", ByteBuffer.wrap(concatParameterSets()));
+            videoTrack = muxer.addTrack(format);
+            muxer.start();
+            started = true;
+            Log.i(TAG, "Muxer started: " + width + "x" + height + ", "
+                    + pending.size() + " pending sample(s)");
+        }
+
+        private byte[] concatParameterSets() {
             int size = 0;
-            for (byte[] part : parts) {
-                size += part.length;
+            for (byte[] nal : parameterSets) {
+                size += nal.length;
             }
             byte[] result = new byte[size];
             int offset = 0;
-            for (byte[] part : parts) {
-                System.arraycopy(part, 0, result, offset, part.length);
-                offset += part.length;
+            for (byte[] nal : parameterSets) {
+                System.arraycopy(nal, 0, result, offset, nal.length);
+                offset += nal.length;
             }
             return result;
+        }
+
+        private void flushPending() {
+            for (PendingSample sample : pending) {
+                writeSample(sample.data, sample.ptsUs);
+            }
+            pending.clear();
+            pendingBytes = 0;
+        }
+
+        private void writeSample(byte[] packet, long ptsUs) {
+            int flags = isKeyFrame(packet) ? MediaCodec.BUFFER_FLAG_KEY_FRAME : 0;
+            bufferInfo.set(0, packet.length, ptsUs, flags);
+            muxer.writeSampleData(videoTrack, ByteBuffer.wrap(packet), bufferInfo);
+        }
+
+        /** Stops the muxer when it was actually started; safe to call on any path. */
+        private void finish() {
+            if (!started) {
+                return;
+            }
+            started = false;
+            try {
+                muxer.stop();
+            } catch (RuntimeException e) {
+                Log.w(TAG, "Failed to stop the muxer.", e);
+            }
         }
     }
 }

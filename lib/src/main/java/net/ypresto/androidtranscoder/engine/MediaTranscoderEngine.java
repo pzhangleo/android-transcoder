@@ -111,9 +111,10 @@ public class MediaTranscoderEngine {
                     mExtractor = null;
                 }
             } catch (RuntimeException e) {
-                // Too fatal to make alive the app, because it may leak native resources.
-                //noinspection ThrowFromFinallyBlock
-                throw new Error("Could not shutdown extractor, codecs and muxer pipeline.", e);
+                // Do not throw from a finally block: an Error here bypasses the caller's
+                // catch (Exception) and looks like a process crash. Log and keep the original
+                // exception (if any) as the one the caller sees.
+                Log.e(TAG, "Could not shutdown extractor, codecs and muxer pipeline.", e);
             }
             try {
                 if (mMuxer != null) {
@@ -164,7 +165,11 @@ public class MediaTranscoderEngine {
                 ? formatStrategy.createAudioOutputFormat(trackResult.mAudioTrackFormat) : null;
 
         if (videoOutputFormat == null && (!hasAudioTrack || audioOutputFormat == null)) {
-            throw new InvalidOutputFormatException("MediaFormatStrategy returned pass-through for all input tracks. No transcoding is necessary.");
+            // Everything is pass-through. Instead of failing the request ("no transcoding is
+            // necessary"), fall through to a plain remux: both tracks get PassThroughTrackTranscoder
+            // and the caller still receives a valid MP4. Callers that reach this branch usually want
+            // the output file, not an exception.
+            Log.i(TAG, "All tracks are pass-through; remuxing without re-encoding.");
         }
         QueuedMuxer queuedMuxer = new QueuedMuxer(mMuxer, new QueuedMuxer.FormatListener() {
             @Override

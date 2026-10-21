@@ -126,14 +126,8 @@ public class VideoTrackTranscoder implements TrackTranscoder {
     // TODO: CloseGuard
     @Override
     public void release() {
-        if (mDecoderOutputSurfaceWrapper != null) {
-            mDecoderOutputSurfaceWrapper.release();
-            mDecoderOutputSurfaceWrapper = null;
-        }
-        if (mEncoderInputSurfaceWrapper != null) {
-            mEncoderInputSurfaceWrapper.release();
-            mEncoderInputSurfaceWrapper = null;
-        }
+        // Codecs must be stopped/released before the surfaces they render to are torn down:
+        // releasing an EGL surface while a codec still references it crashes on some devices.
         if (mDecoder != null) {
             if (mDecoderStarted) mDecoder.stop();
             mDecoder.release();
@@ -143,6 +137,14 @@ public class VideoTrackTranscoder implements TrackTranscoder {
             if (mEncoderStarted) mEncoder.stop();
             mEncoder.release();
             mEncoder = null;
+        }
+        if (mDecoderOutputSurfaceWrapper != null) {
+            mDecoderOutputSurfaceWrapper.release();
+            mDecoderOutputSurfaceWrapper = null;
+        }
+        if (mEncoderInputSurfaceWrapper != null) {
+            mEncoderInputSurfaceWrapper.release();
+            mEncoderInputSurfaceWrapper = null;
         }
     }
 

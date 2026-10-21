@@ -24,20 +24,29 @@ import net.ypresto.androidtranscoder.engine.MediaTranscoderEngine;
 import net.ypresto.androidtranscoder.format.MediaFormatPresets;
 import net.ypresto.androidtranscoder.format.MediaFormatStrategy;
 
+import java.io.Closeable;
 import java.io.FileDescriptor;
 import java.io.FileInputStream;
 import java.io.IOException;
-import java.util.concurrent.Callable;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class MediaTranscoder {
     private static final String TAG = "MediaTranscoder";
     private static final int MAXIMUM_THREAD = 1; // TODO
+    /**
+     * Progress notifications closer than this to the previous one are dropped, so a fast transcode
+     * cannot flood the listener's Looper with hundreds of near-identical updates.
+     */
+    private static final double PROGRESS_EPSILON = 0.001;
     private static volatile MediaTranscoder sMediaTranscoder;
     private ThreadPoolExecutor mExecutor;
 
@@ -99,54 +108,17 @@ public class MediaTranscoder {
      * @throws IOException if input file could not be read.
      */
     public Future<Void> transcodeVideo(final String inPath, final String outPath, final MediaFormatStrategy outFormatStrategy, final Listener listener) throws IOException {
-        FileInputStream fileInputStream = null;
-        FileDescriptor inFileDescriptor;
+        FileInputStream fileInputStream = new FileInputStream(inPath);
+        final FileDescriptor inFileDescriptor;
         try {
-            fileInputStream = new FileInputStream(inPath);
             inFileDescriptor = fileInputStream.getFD();
         } catch (IOException e) {
-            if (fileInputStream != null) {
-                try {
-                    fileInputStream.close();
-                } catch (IOException eClose) {
-                    Log.e(TAG, "Can't close input stream: ", eClose);
-                }
-            }
+            closeQuietly(fileInputStream);
             throw e;
         }
-        final FileInputStream finalFileInputStream = fileInputStream;
-        return transcodeVideo(inFileDescriptor, outPath, outFormatStrategy, new Listener() {
-            @Override
-            public void onTranscodeProgress(double progress) {
-                listener.onTranscodeProgress(progress);
-            }
-
-            @Override
-            public void onTranscodeCompleted() {
-                closeStream();
-                listener.onTranscodeCompleted();
-            }
-
-            @Override
-            public void onTranscodeCanceled() {
-                closeStream();
-                listener.onTranscodeCanceled();
-            }
-
-            @Override
-            public void onTranscodeFailed(Exception exception) {
-                closeStream();
-                listener.onTranscodeFailed(exception);
-            }
-
-            private void closeStream() {
-                try {
-                    finalFileInputStream.close();
-                } catch (IOException e) {
-                    Log.e(TAG, "Can't close input stream: ", e);
-                }
-            }
-        });
+        // The stream must stay open for the whole transcode and is closed by the task itself, so a
+        // cancelled-before-start or failed job can no longer leak the file descriptor.
+        return startTask(inFileDescriptor, outPath, outFormatStrategy, listener, fileInputStream);
     }
 
     /**
@@ -159,64 +131,31 @@ public class MediaTranscoder {
      * @param listener          Listener instance for callback.
      */
     public Future<Void> transcodeVideo(final FileDescriptor inFileDescriptor, final String outPath, final MediaFormatStrategy outFormatStrategy, final Listener listener) {
+        return startTask(inFileDescriptor, outPath, outFormatStrategy, listener, null);
+    }
+
+    private Future<Void> startTask(FileDescriptor inFileDescriptor, String outPath,
+                                   MediaFormatStrategy outFormatStrategy, Listener listener,
+                                   Closeable inputToClose) {
         Looper looper = Looper.myLooper();
         if (looper == null) looper = Looper.getMainLooper();
-        final Handler handler = new Handler(looper);
-        final AtomicReference<Future<Void>> futureReference = new AtomicReference<>();
-        final Future<Void> createdFuture = mExecutor.submit(new Callable<Void>() {
-            @Override
-            public Void call() throws Exception {
-                Exception caughtException = null;
-                try {
-                    MediaTranscoderEngine engine = new MediaTranscoderEngine();
-                    engine.setProgressCallback(new MediaTranscoderEngine.ProgressCallback() {
-                        @Override
-                        public void onProgress(final double progress) {
-                            handler.post(new Runnable() { // TODO: reuse instance
-                                @Override
-                                public void run() {
-                                    listener.onTranscodeProgress(progress);
-                                }
-                            });
-                        }
-                    });
-                    engine.setDataSource(inFileDescriptor);
-                    engine.transcodeVideo(outPath, outFormatStrategy);
-                } catch (IOException e) {
-                    Log.w(TAG, "Transcode failed: input file (fd: " + inFileDescriptor.toString() + ") not found"
-                            + " or could not open output file ('" + outPath + "') .", e);
-                    caughtException = e;
-                } catch (InterruptedException e) {
-                    Log.i(TAG, "Cancel transcode video file.", e);
-                    caughtException = e;
-                } catch (RuntimeException e) {
-                    Log.e(TAG, "Fatal error while transcoding, this might be invalid format or bug in engine or Android.", e);
-                    caughtException = e;
-                }
+        TranscodeTask task = new TranscodeTask(inFileDescriptor, outPath, outFormatStrategy,
+                listener, new Handler(looper), inputToClose);
+        // NOTE: execute() (not submit()) on purpose. A FutureTask cancelled while still queued never
+        // runs its Callable, so the listener would never learn about the cancellation and the caller
+        // would wait forever. This task always runs and converts a pre-start cancellation into
+        // exactly one onTranscodeCanceled() callback.
+        mExecutor.execute(task);
+        return task;
+    }
 
-                final Exception exception = caughtException;
-                handler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        if (exception == null) {
-                            listener.onTranscodeCompleted();
-                        } else {
-                            Future<Void> future = futureReference.get();
-                            if (future != null && future.isCancelled()) {
-                                listener.onTranscodeCanceled();
-                            } else {
-                                listener.onTranscodeFailed(exception);
-                            }
-                        }
-                    }
-                });
-
-                if (exception != null) throw exception;
-                return null;
-            }
-        });
-        futureReference.set(createdFuture);
-        return createdFuture;
+    private static void closeQuietly(Closeable closeable) {
+        if (closeable == null) return;
+        try {
+            closeable.close();
+        } catch (IOException e) {
+            Log.e(TAG, "Can't close input stream: ", e);
+        }
     }
 
     public interface Listener {
@@ -244,5 +183,171 @@ public class MediaTranscoder {
          *                  Note that it IS NOT {@link java.lang.Throwable}. This means {@link java.lang.Error} won't be caught.
          */
         void onTranscodeFailed(Exception exception);
+    }
+
+    /**
+     * A minimal Future backed by the transcode task itself. It exists so that cancelling a task
+     * that has not started yet still produces exactly one terminal callback.
+     */
+    private static final class TranscodeTask implements Runnable, Future<Void> {
+        private final FileDescriptor mInFileDescriptor;
+        private final String mOutPath;
+        private final MediaFormatStrategy mFormatStrategy;
+        private final Listener mListener;
+        private final Handler mHandler;
+        private final Closeable mInputToClose;
+        private final CountDownLatch mDone = new CountDownLatch(1);
+        private final AtomicBoolean mTerminalSignalSent = new AtomicBoolean();
+        private volatile boolean mCancelled;
+        private volatile Exception mFailure;
+        private volatile Thread mWorkerThread;
+        private volatile double mLastProgress = -1;
+
+        private TranscodeTask(FileDescriptor inFileDescriptor, String outPath,
+                              MediaFormatStrategy formatStrategy, Listener listener,
+                              Handler handler, Closeable inputToClose) {
+            mInFileDescriptor = inFileDescriptor;
+            mOutPath = outPath;
+            mFormatStrategy = formatStrategy;
+            mListener = listener;
+            mHandler = handler;
+            mInputToClose = inputToClose;
+        }
+
+        @Override
+        public void run() {
+            mWorkerThread = Thread.currentThread();
+            try {
+                if (mCancelled) {
+                    signalCanceled();
+                    return;
+                }
+                transcode();
+            } finally {
+                mWorkerThread = null;
+                closeQuietly(mInputToClose);
+                mDone.countDown();
+            }
+        }
+
+        private void transcode() {
+            Exception caughtException = null;
+            try {
+                MediaTranscoderEngine engine = new MediaTranscoderEngine();
+                engine.setProgressCallback(new MediaTranscoderEngine.ProgressCallback() {
+                    @Override
+                    public void onProgress(final double progress) {
+                        if (progress >= 0 && progress < 1.0
+                                && Math.abs(progress - mLastProgress) < PROGRESS_EPSILON) {
+                            return;
+                        }
+                        mLastProgress = progress;
+                        mHandler.post(new Runnable() {
+                            @Override
+                            public void run() {
+                                mListener.onTranscodeProgress(progress);
+                            }
+                        });
+                    }
+                });
+                engine.setDataSource(mInFileDescriptor);
+                engine.transcodeVideo(mOutPath, mFormatStrategy);
+            } catch (IOException e) {
+                Log.w(TAG, "Transcode failed: input file (fd: " + mInFileDescriptor
+                        + ") not found or could not open output file ('" + mOutPath + "') .", e);
+                caughtException = e;
+            } catch (InterruptedException e) {
+                Log.i(TAG, "Cancel transcode video file.", e);
+                caughtException = e;
+            } catch (RuntimeException e) {
+                Log.e(TAG, "Fatal error while transcoding, this might be invalid format or bug in engine or Android.", e);
+                caughtException = e;
+            }
+
+            mFailure = caughtException;
+            if (caughtException == null) {
+                signalCompleted();
+            } else if (mCancelled) {
+                signalCanceled();
+            } else {
+                signalFailed(caughtException);
+            }
+        }
+
+        private boolean claimTerminalSignal() {
+            return mTerminalSignalSent.compareAndSet(false, true);
+        }
+
+        private void signalCompleted() {
+            if (!claimTerminalSignal()) return;
+            mHandler.post(new Runnable() {
+                @Override
+                public void run() {
+                    mListener.onTranscodeCompleted();
+                }
+            });
+        }
+
+        private void signalCanceled() {
+            if (!claimTerminalSignal()) return;
+            mHandler.post(new Runnable() {
+                @Override
+                public void run() {
+                    mListener.onTranscodeCanceled();
+                }
+            });
+        }
+
+        private void signalFailed(final Exception exception) {
+            if (!claimTerminalSignal()) return;
+            mHandler.post(new Runnable() {
+                @Override
+                public void run() {
+                    mListener.onTranscodeFailed(exception);
+                }
+            });
+        }
+
+        @Override
+        public boolean cancel(boolean mayInterruptIfRunning) {
+            if (isDone()) return false;
+            mCancelled = true;
+            Thread worker = mWorkerThread;
+            if (mayInterruptIfRunning && worker != null) {
+                worker.interrupt();
+            }
+            return true;
+        }
+
+        @Override
+        public boolean isCancelled() {
+            return mCancelled;
+        }
+
+        @Override
+        public boolean isDone() {
+            return mDone.getCount() == 0;
+        }
+
+        @Override
+        public Void get() throws InterruptedException, ExecutionException {
+            mDone.await();
+            return awaitResult();
+        }
+
+        @Override
+        public Void get(long timeout, TimeUnit unit) throws InterruptedException, ExecutionException, TimeoutException {
+            if (!mDone.await(timeout, unit)) {
+                throw new TimeoutException();
+            }
+            return awaitResult();
+        }
+
+        private Void awaitResult() throws ExecutionException {
+            if (mCancelled) throw new CancellationException();
+            Exception failure = mFailure;
+            if (failure != null) throw new ExecutionException(failure);
+            return null;
+        }
     }
 }

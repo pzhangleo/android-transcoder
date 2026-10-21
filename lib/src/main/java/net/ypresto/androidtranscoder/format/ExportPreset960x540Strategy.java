@@ -22,14 +22,18 @@ import android.util.Log;
 * Created by yuya.tanaka on 2014/11/20.
 */
 class ExportPreset960x540Strategy implements MediaFormatStrategy {
-    private static final String TAG = "ExportPreset960x540Strategy";
+    private static final String TAG = "ExportPreset960x540";
 
     @Override
     public MediaFormat createVideoOutputFormat(MediaFormat inputFormat) {
-        // TODO: detect non-baseline profile and throw exception
         int width = inputFormat.getInteger(MediaFormat.KEY_WIDTH);
         int height = inputFormat.getInteger(MediaFormat.KEY_HEIGHT);
         MediaFormat outputFormat = MediaFormatPresets.getExportPreset960x540(width, height);
+        if (outputFormat == null) {
+            // Input is already 960x540 or smaller: pass through instead of up-scaling.
+            Log.d(TAG, String.format("inputFormat: %dx%d is already small enough, pass-through", width, height));
+            return null;
+        }
         int outWidth = outputFormat.getInteger(MediaFormat.KEY_WIDTH);
         int outHeight = outputFormat.getInteger(MediaFormat.KEY_HEIGHT);
         Log.d(TAG, String.format("inputFormat: %dx%d => outputFormat: %dx%d", width, height, outWidth, outHeight));
