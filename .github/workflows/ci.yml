@@ -24,27 +24,27 @@ jobs:
   # supply-chain problem, and the check costs seconds.
   wrapper:
     name: Gradle wrapper validation
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: gradle/actions/wrapper-validation@v4
+      - uses: actions/checkout@v7
+      - uses: gradle/actions/wrapper-validation@v6
 
   lib:
     name: lib (assemble / unit tests / lint)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Assemble, test and lint
         run: >
@@ -56,7 +56,7 @@ jobs:
 
       - name: Upload test and lint reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lib-reports
           path: |
@@ -69,25 +69,45 @@ jobs:
   # and the sample app share one job and one Gradle cache.
   native:
     name: native-h265 + example (x265 from source)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Install SDK platform, CMake and NDK
+        # `set -e` without `pipefail` on purpose: `yes` gets SIGPIPE when
+        # sdkmanager finishes, and pipefail would turn that into a failure.
         run: |
-          # Versions are pinned in build.gradle; keep them in sync here.
-          sdkmanager --install "platforms;android-35" "build-tools;35.0.0" "cmake;3.22.1" "ndk;27.0.12077973" > /dev/null
-          echo "NDK: $(ls $ANDROID_HOME/ndk)"
+          set -eu
+          sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          # sdkmanager is not on PATH on every runner image and its location has
+          # moved between image generations, so look it up instead of assuming.
+          sdkmanager=$(ls -1 "$sdk"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V | tail -1 || true)
+          if [ -z "$sdkmanager" ]; then
+            echo "::error::sdkmanager not found under $sdk/cmdline-tools"
+            ls -R "$sdk/cmdline-tools" 2>/dev/null | head -30
+            exit 1
+          fi
+          echo "sdk=$sdk"
+          echo "sdkmanager=$sdkmanager"
+          # These versions are pinned in build.gradle; keep them in sync.
+          yes | "$sdkmanager" --sdk_root="$sdk" --install \
+            "platforms;android-35" "build-tools;35.0.0" \
+            "cmake;3.22.1" "ndk;27.0.12077973" \
+            > "$RUNNER_TEMP/sdkmanager.log" 2>&1 || {
+              tail -40 "$RUNNER_TEMP/sdkmanager.log"; exit 1; }
+          tail -5 "$RUNNER_TEMP/sdkmanager.log"
+          test -d "$sdk/ndk/27.0.12077973" || {
+            echo "::error::NDK 27.0.12077973 was not installed"; exit 1; }
 
       - name: Build x265, run native unit tests, assemble the sample app
         run: >
@@ -107,22 +127,24 @@ jobs:
           # The library must not silently depend on the C++ shared runtime: every
           # consumer would then need to ship it, and the example app does not.
           so=$(find native-h265/build -path '*arm64-v8a*' -name libnative_h265.so | head -1)
-          readelf -d "$so" | grep -q 'libc++_shared.so' \
-            && { echo "::error::$so links against libc++_shared.so"; exit 1; } || true
+          if readelf -d "$so" | grep -q 'libc++_shared.so'; then
+            echo "::error::$so links against libc++_shared.so"
+            exit 1
+          fi
 
       - name: Upload reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: native-reports
           path: |
             native-h265/build/reports/**
             native-h265/build/test-results/**
-          if-no-files-found: warn
+          if-no-files-found: ignore
           retention-days: 7
 
       - name: Upload debug APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: example-debug-apk
           path: example/build/outputs/apk/debug/*.apk
