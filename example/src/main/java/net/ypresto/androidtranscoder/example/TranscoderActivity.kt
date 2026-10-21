@@ -84,6 +84,8 @@ class TranscoderActivity : ComponentActivity() {
             showError(getString(R.string.status_output_error))
             return
         }
+        // Drop the previous run's artifact; otherwise every attempt leaves a file behind.
+        deleteOutputFile()
 
         val descriptor = try {
             contentResolver.openFileDescriptor(uri, "r")
@@ -121,7 +123,19 @@ class TranscoderActivity : ComponentActivity() {
             val startTime = SystemClock.uptimeMillis()
             nativeTranscodeFuture = nativeExecutor.submit {
                 try {
-                    NativeH265Transcoder.transcode(source, newOutputFile.absolutePath, VIDEO_BITRATE)
+                    NativeH265Transcoder.transcode(
+                        source,
+                        newOutputFile.absolutePath,
+                        VIDEO_BITRATE
+                    ) { progress ->
+                        // The listener runs on the worker thread; Compose state must be written
+                        // from the main thread.
+                        runOnUiThread {
+                            if (uiState.isTranscoding) {
+                                uiState = uiState.copy(progress = progress.toFloat())
+                            }
+                        }
+                    }
                     runOnUiThread {
                         Log.d(TAG, "Native H.265 transcoding completed in ${SystemClock.uptimeMillis() - startTime}ms")
                         finishTranscoding(succeeded = true, status = getString(R.string.status_completed))
@@ -276,7 +290,9 @@ class TranscoderActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        if (isFinishing) {
+        // A rotation recreates the Activity; without cancelling, the running job would keep writing
+        // to a file whose reference the new instance no longer has.
+        if (isFinishing || isChangingConfigurations) {
             transcodeFuture?.cancel(true)
             nativeTranscodeFuture?.cancel(true)
         }

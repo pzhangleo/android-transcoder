@@ -6,3 +6,6 @@
 **/build/
 .cxx/
 *.iml
+
+# Pre-downloaded native dependency archives (see native-h265/README.md)
+/native-h265/third_party/

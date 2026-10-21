@@ -68,8 +68,13 @@ public class MediaFormatStrategyPresets {
         return new ExportPreset960x540Strategy();
     }
 
+    /**
+     * @deprecated Duplicate of {@link #createAndroid720pStrategy(int, int, int)}; the only
+     * behavioural difference (forcing a re-encode for already-small videos) has been dropped.
+     */
+    @Deprecated
     public static MediaFormatStrategy createAndroid720pStrategyV2(int bitrate, int audioBitrate, int audioChannels) {
-        return new Android720pFormatStrategyV2(bitrate, audioBitrate, audioChannels);
+        return new Android720pFormatStrategy(bitrate, audioBitrate, audioChannels);
     }
 
     public static MediaFormatStrategy createAndroidBitrateFormatStrategy(int bitrate) {

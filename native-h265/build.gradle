@@ -5,11 +5,20 @@ plugins {
 android {
     namespace 'net.ypresto.androidtranscoder.nativeh265'
     compileSdk 35
+    // Pinned so a different NDK on another machine cannot silently change codegen.
+    ndkVersion '27.0.12077973'
 
     defaultConfig {
         minSdk 21
         targetSdk 35
         consumerProguardFiles 'proguard-rules.pro'
+
+        // x265 is compiled from source for every ABI, which dominates build time. Only 64-bit ABIs
+        // are kept: Google Play requires 64-bit anyway, and a software HEVC encoder on a 32-bit
+        // device is far too slow to be useful. Each stripped .so is ~2 MB.
+        ndk {
+            abiFilters 'arm64-v8a', 'x86_64'
+        }
 
         externalNativeBuild {
             cmake {
@@ -24,4 +33,8 @@ android {
             version '3.22.1'
         }
     }
+}
+
+dependencies {
+    testImplementation 'junit:junit:4.13.2'
 }

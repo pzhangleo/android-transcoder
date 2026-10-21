@@ -209,9 +209,13 @@ class AudioChannel {
             inBuff.limit(inBuff.capacity());
 
             // Remix the rest onto overflowBuffer
-            // NOTE: We should only reach this point when overflow buffer is empty
+            // NOTE: We should only reach this point when overflow buffer is empty.
+            // The overflow buffer is kept "empty" as position=0/limit=0, so it has to be cleared
+            // before remixing into it; otherwise the remixer either throws BufferOverflowException
+            // (PASSTHROUGH) or silently drops the tail samples (UPMIX/DOWNMIX).
             final long consumedDurationUs =
                     sampleCountToDurationUs(inBuff.position(), mInputSampleRate, mInputChannelCount);
+            overflowBuff.clear();
             mRemixer.remix(inBuff, overflowBuff);
 
             // Seal off overflowBuff & mark limit

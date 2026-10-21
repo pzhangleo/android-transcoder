@@ -1,6 +1,14 @@
 # Android Transcoder
 
+[![CI](https://github.com/pzhangleo/android-transcoder/actions/workflows/ci.yml/badge.svg)](https://github.com/pzhangleo/android-transcoder/actions/workflows/ci.yml)
+
 A hardware-accelerated MP4 video transcoder for Android, implemented in Java on top of `MediaExtractor`, `MediaCodec`, and `MediaMuxer`. It is intended for apps that need on-device H.264 video conversion without bundling a native FFmpeg binary.
+
+> **License warning for the native module.** The optional `:native-h265` module links **x265**,
+> which is licensed under **GPLv2** (or a commercial license from MulticoreWare). If you ship an
+> APK/AAB that contains `libnative_h265.so`, the GPL reaches the whole application — a closed-source
+> app cannot include it. Use the `MediaCodec` HEVC path in `:lib` instead, or buy a commercial x265
+> license. HEVC also carries patent-pool obligations. `:lib` alone stays Apache-2.0.
 
 ## Capabilities
 
@@ -17,6 +25,11 @@ The library requires Android API 18 (Android 4.3) or later. The Compose example 
 To build the repository, use JDK 17 or later, Android SDK 35, and the Gradle
 wrapper included in this repository (Gradle 8.9). Android Studio's embedded JDK
 17 is sufficient.
+
+Building `:native-h265` additionally requires NDK `27.0.12077973` and CMake
+`3.22.1`; both are pinned in `native-h265/build.gradle`. The x265 source archive
+is downloaded once and verified against a SHA-256 hash, so no `git` clone and no
+extra network round trip per build.
 
 Input compatibility ultimately depends on codecs installed on the device. The library is designed around MP4/H.264 input and output; test the target resolutions, bitrates, profiles, and devices used by your app.
 
@@ -80,7 +93,7 @@ Future<Void> future = MediaTranscoder.getInstance().transcodeVideo(
         });
 ```
 
-Call `future.cancel(true)` to request cancellation. The listener reports cancellation through `onTranscodeCanceled()`.
+Call `future.cancel(true)` to request cancellation. The listener reports cancellation through `onTranscodeCanceled()`, at most one terminal callback is delivered per job, and no `onTranscodeProgress()` arrives after it. The interrupt sent by `cancel(true)` is scoped to that one job: it is never delivered to a job that starts on the same worker thread afterwards.
 
 To open an output file outside your app on Android 7.0 and later, use a `FileProvider` content URI and grant read permission instead of using `Uri.fromFile()`.
 
@@ -93,7 +106,7 @@ To open an output file outside your app on Android 7.0 and later, use a `FilePro
 - `createAndroidH265BitrateFormatStrategy(int bitrate)` for H.265/HEVC output on Android API 24 and later.
 - `createExportPreset960x540Strategy()` for a 960x540 export preset.
 
-Returning `null` from a custom strategy's `createVideoOutputFormat()` or `createAudioOutputFormat()` requests pass-through for that track. When every available track is pass-through, the library rejects the request because no transcoding work is needed.
+Returning `null` from a custom strategy's `createVideoOutputFormat()` or `createAudioOutputFormat()` requests pass-through for that track. When every available track is pass-through the library performs a plain remux (no re-encode) instead of failing, so the caller still gets a valid MP4.
 
 ### H.265 Compatibility
 
@@ -105,11 +118,12 @@ required encoder or profile is unavailable; handle `onTranscodeFailed()` and
 fall back to H.264 when the target device cannot encode HEVC.
 
 The optional `:native-h265` module is a separate GPL-2.0-only integration
-boundary and is not automatically used by `:lib`. It now builds x265 3.4 and
-exposes a low-level I420-to-Annex-B encoder. The higher-level
-`MediaExtractor -> MediaCodec -> x265 -> MediaMuxer` fallback pipeline is still
-being connected. Adding or distributing x265 requires separate source, binary,
-patent, and license review.
+boundary and is not used by `:lib`. It builds x265 from a pinned, hash-verified
+source archive and runs the full
+`MediaExtractor -> MediaCodec -> x265 -> MediaMuxer` fallback pipeline, including
+audio copy-through, rotation hints and progress reporting. See
+`native-h265/README.md`. Adding or distributing x265 requires separate source,
+binary, patent and license review.
 
 ## Example App
 
@@ -132,7 +146,7 @@ choose H.264 or provide an application-specific native codec integration.
 
 ## Optional Native H.265 Module
 
-The `native-h265` module is a separate GPL-2.0-only integration boundary targeting API 21+. The main `:lib` module remains Apache 2.0. The module builds x265 3.4 from a pinned upstream commit and exposes a low-level native encoder. It does not bundle an H.265 decoder or automatically replace the `:lib` MediaCodec pipeline yet.
+The `native-h265` module is a separate GPL-2.0-only integration boundary targeting API 21+. The main `:lib` module remains Apache 2.0. It builds x265 from a pinned, hash-verified archive and runs a complete software HEVC encode pipeline (`MediaExtractor -> MediaCodec decode -> x265 -> MediaMuxer`), including audio copy-through, rotation hints and progress reporting.
 
 ```bash
 ./gradlew :native-h265:assembleDebug
@@ -142,12 +156,26 @@ The module is intentionally independent from the Apache-2.0 library. It must
 not be described or distributed as part of `:lib` without preserving this
 license boundary and the notices for every native dependency.
 
+## Performance Notes
+
+- Video is decoded to a `SurfaceTexture`, rendered through GL and fed to the encoder
+  surface. There is deliberately **no `glFinish()`** in the frame loop: it would serialise
+  decode, render and encode, costing a large fraction of the achievable throughput.
+- Audio and video samples are queued in direct `ByteBuffer`s until all output track formats
+  are known; that buffer is capped at 32 MB so a stuck track cannot OOM the app.
+- `:native-h265` builds x265 with its NEON/SSE assembly **enabled** for ARM ABIs (C-only
+  falls back to roughly 2-3x slower encoding) and converts `Image` planes to I420 with bulk
+  row copies, reusing one frame buffer instead of allocating per frame.
+
 ## Limitations
 
 - Hardware codec availability and behavior vary by device. Validate the codecs and parameters required by your product on real devices.
 - The output MP4 is not optimized for progressive network playback. Use a fast-start tool if the `moov` atom must be placed at the beginning of the file.
 - Encrypted media, streaming output, and arbitrary camera/container formats are not supported.
 - Codec and muxer failures can surface as `RuntimeException`; handle the failure callback and clean up partial output files.
+- `MediaTranscoder` runs one job at a time on a single worker thread. The queued job reports no progress until it starts.
+- The native H.265 path is synchronous and has no cancellation token: cancel by interrupting its worker thread. It also cannot rotate pixels; it writes an orientation hint, so players that ignore the hint show portrait clips sideways.
+- `NativeH265Transcoder` writes x265's Annex-B output straight to `MediaMuxer`, which is what hardware encoders do too. If a specific device/player rejects the resulting file, verify with `ffprobe -show_packets` before converting the samples to length-prefixed form.
 
 ## Further Reading
 

@@ -31,6 +31,12 @@ import java.util.List;
 public class QueuedMuxer {
     private static final String TAG = "QueuedMuxer";
     private static final int BUFFER_SIZE = 64 * 1024;
+    /**
+     * Samples are buffered until every output track format is known. If a track never reports its
+     * format (silent audio track, broken encoder, ...) this buffer used to grow without bound and
+     * killed the process with an OOM. Cap it instead and fail with a diagnosable error.
+     */
+    private static final long MAX_PENDING_BYTES = 32L * 1024 * 1024;
     private final MediaMuxer mMuxer;
     private final Listener mListener;
     private final FormatListener mFormatListener;
@@ -129,6 +135,12 @@ public class QueuedMuxer {
         byteBuf.position(bufferInfo.offset);
         if (mByteBuffer == null) {
             mByteBuffer = ByteBuffer.allocateDirect(BUFFER_SIZE).order(ByteOrder.nativeOrder());
+        }
+        if (mByteBuffer.position() + (long) bufferInfo.size > MAX_PENDING_BYTES) {
+            throw new IllegalStateException("Queued more than " + MAX_PENDING_BYTES
+                    + " bytes while waiting for all output track formats. "
+                    + "video=" + (mVideoFormat != null) + ", audio=" + (mAudioFormat != null)
+                    + ", hasAudioTrack=" + mHasAudioTrack);
         }
         ensureByteBufferCapacity(bufferInfo.size);
         mByteBuffer.put(byteBuf);
