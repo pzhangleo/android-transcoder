@@ -2,6 +2,8 @@ package net.ypresto.androidtranscoder.format;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
@@ -63,5 +65,20 @@ public class AndroidBitrateFormatStrategyTest {
     public void leavesDegenerateInputUntouched() {
         assertArrayEquals(new int[]{0, 0},
                 AndroidBitrateFormatStrategy.resolveOutputSize(0, 0));
+    }
+
+    @Test
+    public void unknownBitrateIsNotTreatedAsWithinTarget() {
+        // Regression: a missing KEY_BIT_RATE was read as "no increase", so a 720p AVC clip without
+        // the field was passed through untouched and never compressed to the requested bitrate.
+        assertFalse(AndroidBitrateFormatStrategy.isBitrateWithinTarget(0, 1_000_000));
+        assertFalse(AndroidBitrateFormatStrategy.isBitrateWithinTarget(-1, 1_000_000));
+    }
+
+    @Test
+    public void knownBitrateAtOrBelowTargetPassesThrough() {
+        assertTrue(AndroidBitrateFormatStrategy.isBitrateWithinTarget(800_000, 1_000_000));
+        assertTrue(AndroidBitrateFormatStrategy.isBitrateWithinTarget(1_000_000, 1_000_000));
+        assertFalse(AndroidBitrateFormatStrategy.isBitrateWithinTarget(2_000_000, 1_000_000));
     }
 }

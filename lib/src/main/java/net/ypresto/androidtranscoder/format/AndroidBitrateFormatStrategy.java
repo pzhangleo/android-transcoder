@@ -37,9 +37,12 @@ public class AndroidBitrateFormatStrategy implements MediaFormatStrategy {
                 ? inputBitrate : mRequestedBitrate;
 
         boolean noResize = outWidth == width && outHeight == height;
-        boolean noBitrateIncrease = inputBitrate <= 0 || outputBitrate >= inputBitrate;
+        // A missing KEY_BIT_RATE means "unknown", not "already small enough": with no number there
+        // is nothing to prove the source fits the target, so it has to be re-encoded. Treating 0 as
+        // "no increase" used to pass through any input that simply lacked the field, and a 720p AVC
+        // clip without a bitrate could come out completely uncompressed.
         if (MediaFormatExtraConstants.MIMETYPE_VIDEO_AVC.equals(videoMime)
-                && noResize && noBitrateIncrease) {
+                && noResize && isBitrateWithinTarget(inputBitrate, mRequestedBitrate)) {
             Log.d(TAG, "Already within the target (" + width + "x" + height + ", "
                     + inputBitrate + " bps). Pass-through.");
             return null;
@@ -54,6 +57,15 @@ public class AndroidBitrateFormatStrategy implements MediaFormatStrategy {
         format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 3);
         format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
         return format;
+    }
+
+    /**
+     * Pass-through is only safe when the source bitrate is known and already at or below the target.
+     * An unknown bitrate ({@code <= 0}) must be re-encoded, otherwise the requested ceiling is
+     * silently ignored.
+     */
+    static boolean isBitrateWithinTarget(int inputBitrate, int requestedBitrate) {
+        return inputBitrate > 0 && inputBitrate <= requestedBitrate;
     }
 
     /**

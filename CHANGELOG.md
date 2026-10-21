@@ -12,6 +12,12 @@ Native H.265 pipeline (`:native-h265`)
 - Rotation metadata is copied to the output via `setOrientationHint()`.
 - VPS/SPS/PPS are accumulated across packets with a bounded pending buffer, instead of requiring all
   three in one packet and risking unbounded memory growth.
+- `csd-0` is written as an Annex-B byte stream again: every parameter set carries its `00 00 00 01`
+  start code and the order is always VPS/SPS/PPS. Concatenating the bare payloads left the muxer
+  parsing zero parameter sets, so the video track could fail to start.
+- An empty end-of-stream buffer from the decoder is treated as a normal end of stream instead of a
+  decoder failure. Previously the last `getOutputImage() == null` aborted an already encoded
+  transcode and deleted the finished file.
 - The partial output file is deleted when transcoding fails.
 - Plane copies use bulk row copies and a single reused frame buffer (was one `ByteBuffer.get()` per
   byte plus a fresh 3 MB array per frame).
@@ -28,9 +34,14 @@ Library (`:lib`)
   throwing "No transcoding is necessary".
 - Cancelling a `Future` that has not started yet now still delivers exactly one
   `onTranscodeCanceled()`, and the input stream is always closed (fixed a file-descriptor leak).
+- Cancellation and completion share one atomic state machine, so `cancel()` is terminal the moment it
+  returns: `isDone()` turns true immediately, `get()` throws `CancellationException`, the input is
+  closed and exactly one terminal callback fires. A cancelled-but-still-running task can no longer
+  report `onTranscodeCompleted()`.
 - A non-baseline H.264 output profile is logged instead of rejected.
 - `AndroidBitrateFormatStrategy` never up-scales, scales non-16:9 sources inside a 1280x720 box, and
-  no longer carries state between calls.
+  no longer carries state between calls. An unknown source bitrate (`KEY_BIT_RATE` missing) now forces
+  a re-encode instead of being treated as "already within the target".
 - Codecs are released before their EGL surfaces; failures during cleanup no longer throw `Error` from
   a `finally` block.
 - `QueuedMuxer` caps its pending buffer at 32 MB instead of growing until OOM.

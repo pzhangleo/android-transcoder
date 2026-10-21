@@ -87,4 +87,38 @@ public class NativeH265TranscoderTest {
         assertTrue(NativeH265Transcoder.splitNals(new byte[]{1, 2, 3, 4}).isEmpty());
         assertFalse(NativeH265Transcoder.isKeyFrame(new byte[0]));
     }
+
+    @Test
+    public void csd0IsAnnexBSoTheMuxerCanParseIt() {
+        byte[] vps = nal(32, 6);
+        byte[] sps = nal(33, 9);
+        byte[] pps = nal(34, 4);
+        byte[] csd = NativeH265Transcoder.toAnnexBParameterSets(new byte[][]{vps, sps, pps});
+
+        // Regression: the payloads used to be concatenated bare, so parsing csd-0 back yielded zero
+        // NAL units and MediaMuxer never got a usable VPS/SPS/PPS.
+        List<int[]> parsed = NativeH265Transcoder.splitNals(csd);
+        assertEquals(3, parsed.size());
+        assertEquals(32, (csd[parsed.get(0)[0]] & 0x7e) >> 1);
+        assertEquals(33, (csd[parsed.get(1)[0]] & 0x7e) >> 1);
+        assertEquals(34, (csd[parsed.get(2)[0]] & 0x7e) >> 1);
+
+        // Every parameter set must start with a 4-byte start code.
+        assertEquals(4, parsed.get(0)[0]);
+        assertEquals(0, csd[parsed.get(1)[0] - 4]);
+        assertEquals(0, csd[parsed.get(1)[0] - 3]);
+        assertEquals(0, csd[parsed.get(1)[0] - 2]);
+        assertEquals(1, csd[parsed.get(1)[0] - 1]);
+
+        // Payloads must survive untouched.
+        assertEquals((4 + 8) + (4 + 11) + (4 + 6), csd.length);
+    }
+
+    @Test
+    public void csd0SkipsMissingParameterSets() {
+        byte[] csd = NativeH265Transcoder.toAnnexBParameterSets(
+                new byte[][]{nal(32, 1), null, nal(34, 1)});
+        assertEquals(2 * (4 + 3), csd.length);
+        assertEquals(2, NativeH265Transcoder.splitNals(csd).size());
+    }
 }

@@ -38,6 +38,7 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class MediaTranscoder {
     private static final String TAG = "MediaTranscoder";
@@ -141,10 +142,10 @@ public class MediaTranscoder {
         if (looper == null) looper = Looper.getMainLooper();
         TranscodeTask task = new TranscodeTask(inFileDescriptor, outPath, outFormatStrategy,
                 listener, new Handler(looper), inputToClose);
-        // NOTE: execute() (not submit()) on purpose. A FutureTask cancelled while still queued never
-        // runs its Callable, so the listener would never learn about the cancellation and the caller
-        // would wait forever. This task always runs and converts a pre-start cancellation into
-        // exactly one onTranscodeCanceled() callback.
+        // NOTE: execute() (not submit()) on purpose: a plain FutureTask cancelled while still queued
+        // never runs its Callable, so nothing would deliver the terminal callback. TranscodeTask
+        // keeps the state itself, so cancel() is complete the moment it returns even if this runnable
+        // is never executed (the executor may be shut down first).
         mExecutor.execute(task);
         return task;
     }
@@ -190,6 +191,12 @@ public class MediaTranscoder {
      * that has not started yet still produces exactly one terminal callback.
      */
     private static final class TranscodeTask implements Runnable, Future<Void> {
+        private static final int STATE_PENDING = 0;
+        private static final int STATE_RUNNING = 1;
+        private static final int STATE_COMPLETED = 2;
+        private static final int STATE_CANCELLED = 3;
+        private static final int STATE_FAILED = 4;
+
         private final FileDescriptor mInFileDescriptor;
         private final String mOutPath;
         private final MediaFormatStrategy mFormatStrategy;
@@ -197,8 +204,16 @@ public class MediaTranscoder {
         private final Handler mHandler;
         private final Closeable mInputToClose;
         private final CountDownLatch mDone = new CountDownLatch(1);
+        /**
+         * Single source of truth for the task state. Cancellation and completion used to be tracked
+         * by a separate {@code mCancelled} flag plus the latch, which allowed states that contradict
+         * each other: a cancelled queued task that was not done yet, or a running task that reported
+         * completion to the listener while {@link #get()} threw {@link CancellationException}.
+         */
+        private final AtomicInteger mState = new AtomicInteger(STATE_PENDING);
         private final AtomicBoolean mTerminalSignalSent = new AtomicBoolean();
-        private volatile boolean mCancelled;
+        /** The input may be closed by {@link #cancel} or by the worker; close it exactly once. */
+        private final AtomicBoolean mInputClosed = new AtomicBoolean();
         private volatile Exception mFailure;
         private volatile Thread mWorkerThread;
         private volatile double mLastProgress = -1;
@@ -218,14 +233,15 @@ public class MediaTranscoder {
         public void run() {
             mWorkerThread = Thread.currentThread();
             try {
-                if (mCancelled) {
-                    signalCanceled();
+                // A cancel() while this task was still queued already produced the terminal
+                // callback and released the input, so there is nothing left to do here.
+                if (!mState.compareAndSet(STATE_PENDING, STATE_RUNNING)) {
                     return;
                 }
                 transcode();
             } finally {
                 mWorkerThread = null;
-                closeQuietly(mInputToClose);
+                closeInput();
                 mDone.countDown();
             }
         }
@@ -237,6 +253,10 @@ public class MediaTranscoder {
                 engine.setProgressCallback(new MediaTranscoderEngine.ProgressCallback() {
                     @Override
                     public void onProgress(final double progress) {
+                        if (mState.get() != STATE_RUNNING) {
+                            // Cancelled or finished: no further progress for this task.
+                            return;
+                        }
                         if (progress >= 0 && progress < 1.0
                                 && Math.abs(progress - mLastProgress) < PROGRESS_EPSILON) {
                             return;
@@ -266,10 +286,12 @@ public class MediaTranscoder {
 
             mFailure = caughtException;
             if (caughtException == null) {
-                signalCompleted();
-            } else if (mCancelled) {
-                signalCanceled();
-            } else {
+                // Loses the race against cancel(): in that case the listener already received
+                // onTranscodeCanceled() and must not also receive onTranscodeCompleted().
+                if (mState.compareAndSet(STATE_RUNNING, STATE_COMPLETED)) {
+                    signalCompleted();
+                }
+            } else if (mState.compareAndSet(STATE_RUNNING, STATE_FAILED)) {
                 signalFailed(caughtException);
             }
         }
@@ -308,20 +330,43 @@ public class MediaTranscoder {
             });
         }
 
+        /**
+         * Cancels the transcode. The future reaches a terminal state immediately: {@link #isDone()}
+         * turns true, {@link #get()} throws {@link CancellationException}, and the listener receives
+         * exactly one {@link Listener#onTranscodeCanceled()} — even if the task never left the
+         * executor queue. With {@code mayInterruptIfRunning == false} the worker may still run to
+         * completion; its result is discarded, so the output file can end up usable.
+         */
         @Override
         public boolean cancel(boolean mayInterruptIfRunning) {
-            if (isDone()) return false;
-            mCancelled = true;
-            Thread worker = mWorkerThread;
-            if (mayInterruptIfRunning && worker != null) {
-                worker.interrupt();
+            for (;;) {
+                int state = mState.get();
+                if (state == STATE_CANCELLED || state == STATE_COMPLETED || state == STATE_FAILED) {
+                    // Already finished, in whichever way: nothing left to cancel.
+                    return false;
+                }
+                if (mState.compareAndSet(state, STATE_CANCELLED)) {
+                    break;
+                }
+            }
+            // Cancellation is terminal right now, whether the task is still queued or already
+            // running. Deferring it to the worker left get() blocked on a task that might never run
+            // (shutdownNow() drops queued tasks) and kept the input descriptor open meanwhile.
+            closeInput();
+            signalCanceled();
+            mDone.countDown();
+            if (mayInterruptIfRunning) {
+                Thread worker = mWorkerThread;
+                if (worker != null) {
+                    worker.interrupt();
+                }
             }
             return true;
         }
 
         @Override
         public boolean isCancelled() {
-            return mCancelled;
+            return mState.get() == STATE_CANCELLED;
         }
 
         @Override
@@ -344,10 +389,16 @@ public class MediaTranscoder {
         }
 
         private Void awaitResult() throws ExecutionException {
-            if (mCancelled) throw new CancellationException();
-            Exception failure = mFailure;
-            if (failure != null) throw new ExecutionException(failure);
+            int state = mState.get();
+            if (state == STATE_CANCELLED) throw new CancellationException();
+            if (state == STATE_FAILED) throw new ExecutionException(mFailure);
             return null;
+        }
+
+        private void closeInput() {
+            if (mInputClosed.compareAndSet(false, true)) {
+                closeQuietly(mInputToClose);
+            }
         }
     }
 }

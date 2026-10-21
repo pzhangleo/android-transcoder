@@ -20,9 +20,7 @@ import java.io.FileDescriptor;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 
 /**
  * Software HEVC fallback for API 21+. Video is decoded by Android and encoded by x265, audio is
@@ -46,6 +44,8 @@ public final class NativeH265Transcoder {
     private static final int NAL_VPS = 32;
     private static final int NAL_SPS = 33;
     private static final int NAL_PPS = 34;
+    /** Annex-B start code, required in front of every NAL unit that goes into {@code csd-0}. */
+    private static final byte[] START_CODE = {0, 0, 0, 1};
 
     private NativeH265Transcoder() {
     }
@@ -225,10 +225,18 @@ public final class NativeH265Transcoder {
                     continue;
                 }
 
+                boolean endOfStream = (info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0;
                 Image image = null;
                 try {
                     image = decoder.getOutputImage(outputIndex);
                     if (image == null) {
+                        // A codec may emit a separate, empty EOS buffer after the last frame. That
+                        // is a normal end of stream, not a decoder failure: failing here threw away
+                        // an already completed transcode and deleted the output file.
+                        if (endOfStream) {
+                            outputDone = true;
+                            continue;
+                        }
                         throw new IOException("Decoder returned no output Image. The device may only"
                                 + " support surface output for " + decoder.getName());
                     }
@@ -275,7 +283,7 @@ public final class NativeH265Transcoder {
                     }
                     decoder.releaseOutputBuffer(outputIndex, false);
                 }
-                if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                if (endOfStream) {
                     outputDone = true;
                 }
             }
@@ -373,6 +381,33 @@ public final class NativeH265Transcoder {
                 width * height + uvWidth * uvHeight);
     }
 
+    /**
+     * Builds {@code csd-0} for the HEVC track. Android expects an Annex-B byte stream there: every
+     * parameter set prefixed with 00 00 00 01, exactly as in the elementary stream. Concatenating
+     * the bare NAL payloads (the previous behaviour) leaves the muxer parsing zero parameter sets,
+     * so the video track never starts and the MP4 is unusable.
+     *
+     * @param parameterSets VPS, SPS and PPS payloads in that order; {@code null} entries are skipped.
+     */
+    static byte[] toAnnexBParameterSets(byte[][] parameterSets) {
+        int size = 0;
+        for (byte[] nal : parameterSets) {
+            if (nal != null) {
+                size += START_CODE.length + nal.length;
+            }
+        }
+        byte[] result = new byte[size];
+        int offset = 0;
+        for (byte[] nal : parameterSets) {
+            if (nal == null) continue;
+            System.arraycopy(START_CODE, 0, result, offset, START_CODE.length);
+            offset += START_CODE.length;
+            System.arraycopy(nal, 0, result, offset, nal.length);
+            offset += nal.length;
+        }
+        return result;
+    }
+
     /** Splits an Annex-B buffer into NAL units as {@code {offset, length}} pairs. */
     static List<int[]> splitNals(byte[] data) {
         List<int[]> nals = new ArrayList<>();
@@ -437,8 +472,9 @@ public final class NativeH265Transcoder {
         private final MediaMuxer muxer;
         private final int frameRate;
         private final List<PendingSample> pending = new ArrayList<>();
-        private final List<byte[]> parameterSets = new ArrayList<>();
-        private final Set<Integer> parameterSetTypes = new HashSet<>();
+        /** VPS, SPS and PPS payloads, indexed by {@code type - NAL_VPS} so csd-0 keeps that order. */
+        private final byte[][] parameterSets = new byte[3][];
+        private int parameterSetCount;
         private final MediaCodec.BufferInfo bufferInfo = new MediaCodec.BufferInfo();
         private int width;
         private int height;
@@ -460,7 +496,7 @@ public final class NativeH265Transcoder {
         private void writeVideo(byte[] packet, long ptsUs) throws IOException {
             if (!started) {
                 collectParameterSets(packet);
-                if (parameterSets.size() < 3) {
+                if (parameterSetCount < 3) {
                     if (pending.size() >= MAX_PENDING_SAMPLES || pendingBytes >= MAX_PENDING_BYTES) {
                         throw new IOException("x265 did not emit VPS/SPS/PPS within "
                                 + pending.size() + " samples; refusing to buffer more");
@@ -479,41 +515,27 @@ public final class NativeH265Transcoder {
         private void collectParameterSets(byte[] packet) {
             for (int[] nal : splitNals(packet)) {
                 int type = nalType(packet, nal);
-                if (type != NAL_VPS && type != NAL_SPS && type != NAL_PPS) {
+                int slot = type - NAL_VPS;
+                if (slot < 0 || slot > 2 || parameterSets[slot] != null) {
                     continue;
                 }
-                if (!parameterSetTypes.add(type)) {
-                    continue;
-                }
+                // Keep the payload only; the start code is put back when csd-0 is assembled.
                 byte[] copy = new byte[nal[1]];
                 System.arraycopy(packet, nal[0], copy, 0, nal[1]);
-                parameterSets.add(copy);
+                parameterSets[slot] = copy;
+                parameterSetCount++;
             }
         }
 
         private void startMuxer() {
             MediaFormat format = MediaFormat.createVideoFormat(MIME_HEVC, width, height);
             format.setInteger(MediaFormat.KEY_FRAME_RATE, frameRate);
-            format.setByteBuffer("csd-0", ByteBuffer.wrap(concatParameterSets()));
+            format.setByteBuffer("csd-0", ByteBuffer.wrap(toAnnexBParameterSets(parameterSets)));
             videoTrack = muxer.addTrack(format);
             muxer.start();
             started = true;
             Log.i(TAG, "Muxer started: " + width + "x" + height + ", "
                     + pending.size() + " pending sample(s)");
-        }
-
-        private byte[] concatParameterSets() {
-            int size = 0;
-            for (byte[] nal : parameterSets) {
-                size += nal.length;
-            }
-            byte[] result = new byte[size];
-            int offset = 0;
-            for (byte[] nal : parameterSets) {
-                System.arraycopy(nal, 0, result, offset, nal.length);
-                offset += nal.length;
-            }
-            return result;
         }
 
         private void flushPending() {
