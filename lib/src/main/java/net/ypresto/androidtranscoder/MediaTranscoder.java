@@ -214,8 +214,12 @@ public class MediaTranscoder {
         private final AtomicBoolean mTerminalSignalSent = new AtomicBoolean();
         /** The input may be closed by {@link #cancel} or by the worker; close it exactly once. */
         private final AtomicBoolean mInputClosed = new AtomicBoolean();
+        /**
+         * Owns the worker thread for this task only. Interrupting through this handle cannot hit
+         * the next task that the pooled thread picks up. See {@link WorkerThreadHandle}.
+         */
+        private final WorkerThreadHandle mWorker = new WorkerThreadHandle();
         private volatile Exception mFailure;
-        private volatile Thread mWorkerThread;
         private volatile double mLastProgress = -1;
 
         private TranscodeTask(FileDescriptor inFileDescriptor, String outPath,
@@ -231,7 +235,7 @@ public class MediaTranscoder {
 
         @Override
         public void run() {
-            mWorkerThread = Thread.currentThread();
+            mWorker.attach(Thread.currentThread());
             try {
                 // A cancel() while this task was still queued already produced the terminal
                 // callback and released the input, so there is nothing left to do here.
@@ -240,7 +244,7 @@ public class MediaTranscoder {
                 }
                 transcode();
             } finally {
-                mWorkerThread = null;
+                mWorker.detach();
                 closeInput();
                 mDone.countDown();
             }
@@ -265,6 +269,15 @@ public class MediaTranscoder {
                         mHandler.post(new Runnable() {
                             @Override
                             public void run() {
+                                // The check above runs on the worker, but this runnable runs later
+                                // on the listener's Looper. Between the two, cancel() can claim the
+                                // terminal signal and post onTranscodeCanceled(), which the Looper
+                                // may then deliver before this queued progress — leaving a stale
+                                // progress callback arriving after the task ended. Re-check at
+                                // delivery time so no progress can follow the terminal callback.
+                                if (mTerminalSignalSent.get()) {
+                                    return;
+                                }
                                 mListener.onTranscodeProgress(progress);
                             }
                         });
@@ -356,10 +369,11 @@ public class MediaTranscoder {
             signalCanceled();
             mDone.countDown();
             if (mayInterruptIfRunning) {
-                Thread worker = mWorkerThread;
-                if (worker != null) {
-                    worker.interrupt();
-                }
+                // Do NOT capture the thread and interrupt it afterwards: the worker can finish and
+                // the same pooled thread can start the next task in between, and that task would be
+                // the one getting interrupted. The handle interrupts only while this task still
+                // owns the thread.
+                mWorker.interrupt();
             }
             return true;
         }

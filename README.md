@@ -93,7 +93,7 @@ Future<Void> future = MediaTranscoder.getInstance().transcodeVideo(
         });
 ```
 
-Call `future.cancel(true)` to request cancellation. The listener reports cancellation through `onTranscodeCanceled()`.
+Call `future.cancel(true)` to request cancellation. The listener reports cancellation through `onTranscodeCanceled()`, at most one terminal callback is delivered per job, and no `onTranscodeProgress()` arrives after it. The interrupt sent by `cancel(true)` is scoped to that one job: it is never delivered to a job that starts on the same worker thread afterwards.
 
 To open an output file outside your app on Android 7.0 and later, use a `FileProvider` content URI and grant read permission instead of using `Uri.fromFile()`.
 

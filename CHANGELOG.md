@@ -38,6 +38,15 @@ Library (`:lib`)
   returns: `isDone()` turns true immediately, `get()` throws `CancellationException`, the input is
   closed and exactly one terminal callback fires. A cancelled-but-still-running task can no longer
   report `onTranscodeCompleted()`.
+- `cancel(true)` no longer leaks its interrupt into the next job. The worker thread reference used to
+  be captured before interrupting, so a task that finished in between could pass the interrupt on to
+  the task the same pooled thread had just started, which then failed with a stray
+  `InterruptedException`. Interrupting now happens through `WorkerThreadHandle`, which is guarded by
+  the same monitor that the worker takes when it detaches, and detaching clears the interrupt status
+  so the pooled thread cannot carry it into the next task.
+- Progress callbacks are dropped if the task reached a terminal state before the posted callback ran.
+  The state was only checked on the worker thread, so a queued progress callback could still run
+  after `onTranscodeCanceled()` and overwrite newer UI state.
 - A non-baseline H.264 output profile is logged instead of rejected.
 - `AndroidBitrateFormatStrategy` never up-scales, scales non-16:9 sources inside a 1280x720 box, and
   no longer carries state between calls. An unknown source bitrate (`KEY_BIT_RATE` missing) now forces
@@ -51,7 +60,8 @@ Library (`:lib`)
 
 Tests and tooling
 - Replaced the broken `androidTest` sources (they did not compile: no test dependencies, removed
-  `android.test` APIs) with 15 JVM unit tests covering sizing rules and Annex-B/key-frame parsing.
+  `android.test` APIs) with JVM unit tests covering sizing rules, Annex-B/key-frame parsing and the
+  cancel/worker-thread coordination (17 tests in `:lib`, 7 in `:native-h265`).
 - `lint` passes for both modules; long log tags fixed.
 - GitHub Actions (`ci.yml`) runs three checks on every pull request: wrapper validation, `:lib`
   assemble + unit tests + lint, and a full `:native-h265` + `:example` build with the x265 compile,
