@@ -1,5 +1,7 @@
 # Android Transcoder
 
+[![CI](https://github.com/pzhangleo/android-transcoder/actions/workflows/ci.yml/badge.svg)](https://github.com/pzhangleo/android-transcoder/actions/workflows/ci.yml)
+
 A hardware-accelerated MP4 video transcoder for Android, implemented in Java on top of `MediaExtractor`, `MediaCodec`, and `MediaMuxer`. It is intended for apps that need on-device H.264 video conversion without bundling a native FFmpeg binary.
 
 > **License warning for the native module.** The optional `:native-h265` module links **x265**,

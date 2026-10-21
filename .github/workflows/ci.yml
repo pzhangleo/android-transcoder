@@ -1,0 +1,130 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+# A new push to the same PR supersedes the previous run. Without this, an
+# expensive x265 build keeps a runner busy for a commit nobody looks at.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GRADLE_OPTS: -Dorg.gradle.daemon=false
+
+jobs:
+  # Cheap gate before any Gradle work: a tampered or truncated wrapper jar is a
+  # supply-chain problem, and the check costs seconds.
+  wrapper:
+    name: Gradle wrapper validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: gradle/actions/wrapper-validation@v4
+
+  lib:
+    name: lib (assemble / unit tests / lint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Assemble, test and lint
+        run: >
+          ./gradlew
+          :lib:assembleDebug
+          :lib:testDebugUnitTest
+          :lib:lintDebug
+          --stacktrace
+
+      - name: Upload test and lint reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lib-reports
+          path: |
+            lib/build/reports/**
+            lib/build/test-results/**
+          if-no-files-found: warn
+          retention-days: 7
+
+  # The NDK install and the x265 compile dominate CI time, so the native module
+  # and the sample app share one job and one Gradle cache.
+  native:
+    name: native-h265 + example (x265 from source)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install SDK platform, CMake and NDK
+        run: |
+          # Versions are pinned in build.gradle; keep them in sync here.
+          sdkmanager --install "platforms;android-35" "build-tools;35.0.0" "cmake;3.22.1" "ndk;27.0.12077973" > /dev/null
+          echo "NDK: $(ls $ANDROID_HOME/ndk)"
+
+      - name: Build x265, run native unit tests, assemble the sample app
+        run: >
+          ./gradlew
+          :native-h265:testDebugUnitTest
+          :native-h265:assembleDebug
+          :example:assembleDebug
+          --stacktrace
+
+      - name: Verify the packaged native library
+        run: |
+          set -euo pipefail
+          apk=$(echo example/build/outputs/apk/debug/*.apk)
+          echo "APK: $apk ($(du -h "$apk" | cut -f1))"
+          unzip -l "$apk" | grep -q 'lib/arm64-v8a/libnative_h265.so' \
+            || { echo "::error::arm64-v8a libnative_h265.so missing from the APK"; exit 1; }
+          # The library must not silently depend on the C++ shared runtime: every
+          # consumer would then need to ship it, and the example app does not.
+          so=$(find native-h265/build -path '*arm64-v8a*' -name libnative_h265.so | head -1)
+          readelf -d "$so" | grep -q 'libc++_shared.so' \
+            && { echo "::error::$so links against libc++_shared.so"; exit 1; } || true
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-reports
+          path: |
+            native-h265/build/reports/**
+            native-h265/build/test-results/**
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: example-debug-apk
+          path: example/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14

@@ -42,6 +42,9 @@ Tests and tooling
 - Replaced the broken `androidTest` sources (they did not compile: no test dependencies, removed
   `android.test` APIs) with 15 JVM unit tests covering sizing rules and Annex-B/key-frame parsing.
 - `lint` passes for both modules; long log tags fixed.
+- GitHub Actions (`ci.yml`) runs three checks on every pull request: wrapper validation, `:lib`
+  assemble + unit tests + lint, and a full `:native-h265` + `:example` build with the x265 compile,
+  the native unit tests, a `.so` packaging assertion and the debug APK as a downloadable artifact.
 - README documents the GPL implications of bundling x265 and the performance trade-offs.
 
 ## 0.2.0
